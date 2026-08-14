@@ -539,8 +539,22 @@ a:hover {
 
 .result-buttons {
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 12px;
   justify-content: center;
+}
+/* ボタンが3つあるとカード幅(520px)に一列で収まらない。主役の「もういちど」を
+   1行目に単独で置き、戻る系の2つを2行目に並べる。折り返しは行単位で起こしたい
+   ので、ラベル自体は改行させない */
+.result-buttons .btn {
+  white-space: nowrap;
+}
+.result-buttons .btn:first-child {
+  flex-basis: 100%;
+}
+.result-buttons .btn--ghost {
+  font-size: 18px;
+  padding: 10px 20px;
 }
 
 /* ---- ローディング ---- */
