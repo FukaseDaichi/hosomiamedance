@@ -311,6 +311,7 @@ def verify(data: dict) -> list[str]:
 
 
 def main() -> int:
+    baked = False
     if "--verify" in sys.argv:
         if not OUT.exists():
             print(f"NG: {OUT} が無い", file=sys.stderr)
@@ -318,14 +319,20 @@ def main() -> int:
         data = json.loads(OUT.read_text(encoding="utf-8"))
     else:
         data = bake()
-        OUT.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
-        print(f"wrote {OUT}")
+        baked = True
 
     bad = verify(data)
     for b in bad:
         print(f"NG: {b}", file=sys.stderr)
     if bad:
+        if baked:
+            print(f"検査に落ちたので {OUT} は更新していない", file=sys.stderr)
         return 1
+
+    # 全検査に合格した場合だけ書き出す
+    if baked:
+        OUT.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+        print(f"wrote {OUT}")
     for key in DIFFS:
         ns = data["notes"][key]
         dist = [sum(1 for _t, lane in ns if lane == i) for i in range(4)]
