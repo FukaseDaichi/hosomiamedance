@@ -18,7 +18,7 @@ export interface LyricLine {
 /** 歌い終わってから余韻で残す秒数。 */
 const TAIL = 0.3
 
-export const LYRICS: LyricLine[] = [
+export const AMEDANCE_LYRICS: LyricLine[] = [
   { t: 0.0, text: 'あめ… あめ… ふるね' },
   { t: 2.28, text: 'みずたまり ぱしゃん' },
   { t: 5.24, text: 'つまさきで アメダンス' },
@@ -60,18 +60,47 @@ export const LYRICS: LyricLine[] = [
   { t: 128.8, end: 132.9, text: 'あした はれても おどろうね' }, // 最終行
 ]
 
+// ホソミアマゴイダンスは 30.9 秒から歌い始め、113.9 秒で歌い終わる。
+// 前後は伴奏だけ。分離ボーカルの音高がフレーム間で全く動かない
+// (実際の歌唱区間は 10 セント前後ゆれる)ことから、歌ではなく
+// 分離しきれなかったシンセとオルゴールだと判別した。
+export const AMAGOI_LYRICS: LyricLine[] = [
+  { t: 30.88, text: 'くもの すきまに ひかり' },
+  { t: 33.54, end: 36.9, text: 'まだ かえらないで' },
+  { t: 37.86, text: 'みずたまりに うつる そら' },
+  { t: 41.92, text: 'きえちゃう まえに' },
+  { t: 44.46, text: 'つまさき とん と ならして' },
+  { t: 49.16, text: 'ふって ふって もういちど' },
+  { t: 51.94, end: 55.6, text: 'くるり まわって おねがい' },
+  { t: 56.64, text: 'ホソミ アマゴイダンス' },
+  { t: 59.98, text: 'つまさき とん と ならして' },
+  { t: 64.22, text: 'ふって ふって もういちど' },
+  { t: 66.98, end: 70.8, text: 'くるり まわって おねがい' },
+  { t: 71.76, text: 'ホソミ アマゴイダンス' },
+  { t: 75.24, text: 'かさは もう いらないけど' },
+  { t: 79.34, text: 'にぎったまま はなせないの' },
+  { t: 82.96, text: 'ぬれた かみも すきだったよ' },
+  { t: 86.88, end: 89.8, text: 'あめのおと こいしいよ' },
+  { t: 90.55, text: 'そらに ゆびで かく うずまき' },
+  { t: 94.4, text: 'ふって ふって もういちど' },
+  { t: 97.16, end: 101.0, text: 'くるり まわって おねがい' },
+  { t: 101.88, text: 'ららら アマゴイダンス' },
+  { t: 105.14, text: 'あした また あえるよね' },
+  { t: 109.44, end: 114.0, text: 'やくそくだよ… あめさん…' }, // 最終行。以降は伴奏だけ
+]
+
 /** 時刻 t に表示すべき行のインデックス。表示しないときは -1。 */
-export function lineAt(t: number): number {
+export function lineAt(lyrics: LyricLine[], t: number): number {
   if (t < 0) return -1
-  // 行数が39なので線形走査で足りる
+  // 行数はたかだか数十なので線形走査で足りる
   let idx = -1
-  for (let i = 0; i < LYRICS.length; i++) {
-    if (LYRICS[i].t > t) break
+  for (let i = 0; i < lyrics.length; i++) {
+    if (lyrics[i].t > t) break
     idx = i
   }
   if (idx < 0) return -1
-  const line = LYRICS[idx]
-  const next = idx + 1 < LYRICS.length ? LYRICS[idx + 1].t : Infinity
+  const line = lyrics[idx]
+  const next = idx + 1 < lyrics.length ? lyrics[idx + 1].t : Infinity
   const until = Math.min(next, line.end === undefined ? Infinity : line.end + TAIL)
   return t < until ? idx : -1
 }

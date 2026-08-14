@@ -1,12 +1,10 @@
-// ホソミアメダンス — WebAudio engine: 曲(mp3)の再生 + 雨音 + 効果音
+// ホソミダンス — WebAudio engine: 曲(mp3)の再生 + 雨音 + 効果音
 //
 // 曲は SUNO で作った実音源を decodeAudioData して AudioBufferSourceNode で鳴らす。
 // <audio> を使わないのは、判定の時計 ctx.currentTime と同じ基準で秒を取るため。
-// 譜面は scripts/bake-chart.py が焼いた charts.json を読むだけで、ここでは解析しない。
+// 曲そのものの定義(URL・BPM・歌詞・譜面)は songs.ts が持つ。ここは鳴らす係。
 
-import chartData from './charts.json'
-
-export type DifficultyId = 'easy' | 'normal' | 'hard'
+import type { DifficultyId } from './songs'
 
 export interface Difficulty {
   id: DifficultyId
@@ -21,29 +19,12 @@ export interface Difficulty {
   goodWindow: number
 }
 
-export interface ChartNote {
-  /** 曲頭からの秒数 */
-  t: number
-  lane: number
-}
-
-export const BPM = 156
-export const SONG_TITLE = 'ホソミアメダンス'
-/** 曲の終わり(秒)。アウトロのフェードを聴かせてから結果画面に行く。 */
-export const SONG_END = 137.0
-
-const SONG_URL = `${import.meta.env.BASE_URL}assets/hosomiamedance.mp3`
-
 export const DIFFICULTIES: Difficulty[] = [
-  { id: 'easy', name: 'EASY', desc: 'はじめての アメダンス', hearts: 1, noteSpeed: 260, perfWindow: 0.09, goodWindow: 0.19 },
+  // 説明文は曲をまたいで使うので、特定の曲名を入れない
+  { id: 'easy', name: 'EASY', desc: 'はじめての ダンス', hearts: 1, noteSpeed: 260, perfWindow: 0.09, goodWindow: 0.19 },
   { id: 'normal', name: 'NORMAL', desc: 'ノリノリで おどろう', hearts: 2, noteSpeed: 320, perfWindow: 0.07, goodWindow: 0.15 },
-  { id: 'hard', name: 'HARD', desc: 'ぜんりょく アメダンス!', hearts: 3, noteSpeed: 400, perfWindow: 0.055, goodWindow: 0.12 },
+  { id: 'hard', name: 'HARD', desc: 'ぜんりょく ダンス!', hearts: 3, noteSpeed: 400, perfWindow: 0.055, goodWindow: 0.12 },
 ]
-
-/** 焼いた譜面を秒単位のノーツ列として返す。 */
-export function chart(id: DifficultyId): ChartNote[] {
-  return chartData.notes[id].map((n) => ({ t: n[0], lane: n[1] }))
-}
 
 export type SfxName = 'perfect' | 'good' | 'miss' | 'special' | 'select' | 'start'
 
@@ -61,10 +42,15 @@ interface SongState {
 
 let engine: Engine | null = null
 let songState: SongState | null = null
-let songBuffer: AudioBuffer | null = null
-let songBytes: Promise<ArrayBuffer> | null = null
+/**
+ * デコード済みの曲。デコード後の PCM は 1 曲で 50MB 前後あるので、
+ * 抱えるのは今の曲だけにして、別の曲を読むときに捨てる
+ */
+let songBuffer: { url: string; buffer: AudioBuffer } | null = null
+/** 取得中・取得済みの生バイト。曲を跨いで先読みできるよう URL ごとに持つ */
+const songBytes = new Map<string, Promise<ArrayBuffer>>()
 /** loadSong の同時呼び出しをまとめて 1 回の取得・デコードにするためのキャッシュ */
-let songLoadPromise: Promise<void> | null = null
+const songLoadPromise = new Map<string, Promise<void>>()
 
 function ensureEngine(): Engine {
   if (engine) return engine
@@ -113,14 +99,17 @@ function ensureEngine(): Engine {
 }
 
 /** mp3 の取得だけ先に始める。AudioContext は要らないので起動直後に呼べる。 */
-export function prefetchSong() {
-  if (!songBytes) {
-    songBytes = fetch(SONG_URL).then((r) => {
-      // ステータスを見ずに進むと、404 の HTML 本文を decodeAudioData に渡して
-      // 意味の分からない EncodingError になる。ここで原因を語らせる
-      if (!r.ok) throw new Error(`曲の取得に失敗しました: ${SONG_URL} (status ${r.status})`)
-      return r.arrayBuffer()
-    })
+export function prefetchSong(url: string) {
+  if (!songBytes.has(url)) {
+    songBytes.set(
+      url,
+      fetch(url).then((r) => {
+        // ステータスを見ずに進むと、404 の HTML 本文を decodeAudioData に渡して
+        // 意味の分からない EncodingError になる。ここで原因を語らせる
+        if (!r.ok) throw new Error(`曲の取得に失敗しました: ${url} (status ${r.status})`)
+        return r.arrayBuffer()
+      }),
+    )
   }
 }
 
@@ -129,43 +118,48 @@ export function prefetchSong() {
  * 取得やデコードに失敗した場合はキャッシュを捨て、次回の呼び出しで再取得できるようにする。
  * 呼び出しが重なった場合は同じ Promise を返し、decodeAudioData の並行実行を避ける。
  */
-export function loadSong(): Promise<void> {
-  if (songBuffer) return Promise.resolve()
-  if (!songLoadPromise) {
-    songLoadPromise = (async () => {
-      try {
-        prefetchSong()
-        const e = ensureEngine()
-        const bytes = await songBytes!
-        // decodeAudioData は渡した ArrayBuffer を detach するので、コピーを渡す
-        songBuffer = await e.ctx.decodeAudioData(bytes.slice(0))
-        // デコードに使い終わった生の ArrayBuffer(3.3MB)を保持し続けない。
-        // 再取得が要る場合は prefetchSong() が面倒を見る
-        songBytes = null
-      } catch (err) {
-        // 失敗したキャッシュ(fetch の Promise)を捨てて、次回呼び出しで再取得させる
-        songBytes = null
-        throw err
-      } finally {
-        songLoadPromise = null
-      }
-    })()
-  }
-  return songLoadPromise
+export function loadSong(url: string): Promise<void> {
+  if (isSongReady(url)) return Promise.resolve()
+  const inflight = songLoadPromise.get(url)
+  if (inflight) return inflight
+
+  const p = (async () => {
+    try {
+      prefetchSong(url)
+      const e = ensureEngine()
+      const bytes = await songBytes.get(url)!
+      // decodeAudioData は渡した ArrayBuffer を detach するので、コピーを渡す
+      const buffer = await e.ctx.decodeAudioData(bytes.slice(0))
+      // 別の曲を鳴らしている最中なら止めてから差し替える
+      if (songBuffer && songBuffer.url !== url) stop()
+      songBuffer = { url, buffer }
+      // デコードに使い終わった生の ArrayBuffer(数MB)を保持し続けない。
+      // 再取得が要る場合は prefetchSong() が面倒を見る
+      songBytes.delete(url)
+    } catch (err) {
+      // 失敗したキャッシュ(fetch の Promise)を捨てて、次回呼び出しで再取得させる
+      songBytes.delete(url)
+      throw err
+    } finally {
+      songLoadPromise.delete(url)
+    }
+  })()
+  songLoadPromise.set(url, p)
+  return p
 }
 
-export function isSongReady(): boolean {
-  return songBuffer !== null
+export function isSongReady(url: string): boolean {
+  return songBuffer !== null && songBuffer.url === url
 }
 
 /** 曲を先頭から再生する。0.9 秒の助走を置いてから鳴り始める。 */
-export function startSong() {
+export function startSong(url: string) {
   const e = ensureEngine()
   if (e.ctx.state === 'suspended') void e.ctx.resume()
-  if (!songBuffer) throw new Error('song is not loaded')
+  if (!songBuffer || songBuffer.url !== url) throw new Error('song is not loaded')
   stop()
   const src = e.ctx.createBufferSource()
-  src.buffer = songBuffer
+  src.buffer = songBuffer.buffer
   src.connect(e.master)
   const startAt = e.ctx.currentTime + 0.9
   src.start(startAt)

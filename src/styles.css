@@ -384,6 +384,13 @@ a:hover {
   text-shadow: 0 4px 0 #d96a9d;
 }
 
+/* 難易度選択で、いま選んでいる曲を思い出せるようにする */
+.select-song-name {
+  margin-top: -20px;
+  font-size: 22px;
+  color: #ffd9ec;
+}
+
 .song-list {
   display: flex;
   gap: 26px;
@@ -407,6 +414,14 @@ a:hover {
 .song-card:hover {
   transform: translateY(-8px) scale(1.03);
   border-color: #ff9ec7;
+}
+
+/* 曲えらびのカード。曲名が難易度名より長いので幅を足し、文字を少し詰める */
+.song-card--track {
+  width: 300px;
+}
+.song-card--track .song-name {
+  font-size: 24px;
 }
 
 .song-key {
