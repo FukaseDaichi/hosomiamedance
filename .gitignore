@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.DS_Store
+*.local
+
+# 素材の元データ・中間生成物(配信には public/assets/ のみ使う)
+hosomi.gif
+hosomi_png/
+MODI_iroha-mochi_2018_0112/
+
+# Claude Design から取得した旧実装(Vite 版に移植済み)
+support.js
+audio.js
+rain-stage.js
+ホソミアメダンス.dc.html
