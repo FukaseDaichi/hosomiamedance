@@ -56,7 +56,8 @@ WebFetch で以下を読み、下の草稿の各原則が既存理論の言語�
 - **このゲームでは**: select_times がオンセット強度の降順で選ぶため大半は守られるが、
   区間の割当数(quota)が多すぎると弱い点まで拾ってしまう。
 - **検査**: 可。bake 時に verify_audio がオンセット整合率(強度 ONSET_MIN 以上の
-  ノーツ比率 ≥ ONSET_RATE_MIN)を検査する。
+  ノーツ比率 ≥ ONSET_RATE_MIN)を検査する。ただし採点に使う classify() は
+  ノーツ選定にも使っているので、classify() の重みを変えた場合は自己参照になる。
 
 ## 2. 密度カーブ (intensity mapping)
 
@@ -64,6 +65,8 @@ WebFetch で以下を読み、下の草稿の各原則が既存理論の言語�
   密度と曲の盛り上がりが食い違うと「曲を叩いている感」が失われる。
 - **このゲームでは**: SECTIONS の倍率がカーブの意図。生成結果が意図からずれていないかが問題。
 - **検査**: 可。verify がセクション別ノーツ数を SECTIONS の配分と照合する。
+  ただし照合先が SECTIONS 自身なので、検査が言えるのは「生成が意図どおり」までで、
+  「意図が曲に合っている」かは言えない。倍率を変えたらプレイ確認で確かめる。
 
 ## 3. 休符設計 (rest moments)
 
@@ -313,7 +316,8 @@ def verify_audio(data: dict, f) -> list[str]:
     return {"bpm": BPM, "beat0": BEAT0, "songEnd": SONG_END, "notes": notes}, f
 ```
 
-`main()` の分岐を変更:
+`main()` の分岐を変更。**検査に合格してから書き込む**(落ちた bake が最後に合格した
+charts.json を壊さないため。既存コードは書き込んでから検査していた):
 
 ```python
 def main() -> int:
@@ -325,8 +329,6 @@ def main() -> int:
         data = json.loads(OUT.read_text(encoding="utf-8"))
     else:
         data, f = bake()
-        OUT.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
-        print(f"wrote {OUT}")
 
     bad = verify(data)
     if f is not None:
@@ -334,7 +336,14 @@ def main() -> int:
     for b in bad:
         print(f"NG: {b}", file=sys.stderr)
     if bad:
+        if f is not None:
+            print(f"検査に落ちたので {OUT} は更新していない", file=sys.stderr)
         return 1
+
+    # 全検査に合格した場合だけ書き出す
+    if f is not None:
+        OUT.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+        print(f"wrote {OUT}")
 ```
 
 (以降の OK 表示は既存のまま)
@@ -378,7 +387,29 @@ Step 3 の実測で 0.90 を下回る難易度があった場合: それは quot
 過剰という理論違反なので、**閾値は下げず**、違反として記録して Task 6 の改善ループで
 生成側(SECTIONS の倍率か DIFFS の target)を直す。
 
-- [ ] **Step 5: コミット**
+- [ ] **Step 5: 検査に落ちた bake が charts.json を壊さないことを確認**
+
+閾値を一時的に不可能な値にした状態で bake を走らせ、JSON が無傷であることを確かめる:
+
+```bash
+cp src/charts.json /tmp/charts-before.json
+ONSET_RATE_MIN_OVERRIDE=1.01 uv run python - <<'EOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bc", "scripts/bake-chart.py")
+bc = importlib.util.module_from_spec(spec); spec.loader.exec_module(bc)
+bc.ONSET_RATE_MIN = 1.01  # 必ず検査に落ちる
+sys.argv = ["bake-chart.py"]
+rc = bc.main()
+assert rc == 1, f"落ちるはずが rc={rc}"
+print("PASS: bake が検査で失敗した")
+EOF
+diff -q /tmp/charts-before.json src/charts.json && echo "PASS: charts.json は無傷"
+```
+
+Expected: `PASS: bake が検査で失敗した` と `PASS: charts.json は無傷` の両方。
+`diff` が差分を報告したら書き込み順序の修正が効いていないので Step 2 に戻る。
+
+- [ ] **Step 6: コミット**
 
 ```bash
 git add scripts/bake-chart.py
@@ -407,7 +438,6 @@ description: 譜面(src/charts.json)を譜面理論に照らして診断・改�
 
 譜面の「気持ち良さ」を theory.md の原則に照らして診断し、bake-chart.py を
 修正して改善するループを回す。合格基準は bake-chart.py の自動検査。
-人間のプレイ確認は必須としない。
 
 ## 前提
 
@@ -415,6 +445,16 @@ description: 譜面(src/charts.json)を譜面理論に照らして診断・改�
 - BPM / BEAT0 / BAR0 は実測定数。触らない
 - 検査化済みの原則(音付け・密度カーブ・強拍優先)は bake が自動で見張る。
   未検査の原則(休符設計・反復と変化・難易度の一貫性)は自分で JSON を読んで診断する
+
+## 自動検査で測れないこと
+
+密度カーブ検査は「生成結果が `SECTIONS` の意図どおりか」を見るだけで、
+「`SECTIONS` の意図が曲に合っているか」は見ていない。倍率を曲と逆行する値に
+変えても、期待値も一緒に動くので検査は通る。オンセット整合検査も、ノーツ選定に
+使う `classify()` と同じ関数で採点しているので同じ自己参照性がある。
+
+つまり**つまみそのものを変えたときは、自動検査は「壊れていないこと」しか
+保証しない**。良くなったかどうかの判断には、下の手順6のプレイ確認が要る。
 
 ## 手順
 
@@ -433,6 +473,12 @@ description: 譜面(src/charts.json)を譜面理論に照らして診断・改�
    - `git diff scripts/bake-chart.py` の要約(どのつまみを何のために動かしたか)
    - 難易度ごとのノーツ数とレーン分布の変化(bake の OK 行を前後で比較)
    - 診断で挙げた違反が解消したか
+6. **譜面を大きく変えたときはプレイ確認を勧める**。目安は `SECTIONS` の倍率変更、
+   `DIFFS` の target 10% 超の増減、`classify` / `assign_lanes` のロジック変更。
+   自動検査が自己参照で測れない範囲(上のセクション)がそこだからで、
+   `npm run dev` を案内し、変えた区間を名指しして
+   「小節63-79 のラスサビが詰まりすぎていないか」のように確認点を具体的に伝える。
+   確認は必須ではない。ユーザーが不要と言えばそのまま進めてよい
 
 ## 理論を育てる
 
@@ -470,18 +516,22 @@ git commit -m "feat: 譜面改善スキル chart-feel の手順書を追加"
 
 - [ ] **Step 1: AGENTS.md の規約を書き換える**
 
-削除する行:
+既存の行(**判定・スコア・描画のプレイ確認は残す**。bake-chart.py の検査では
+判定タイミングも Canvas 描画も観測できないため):
 
 ```markdown
 - ゲームロジック（判定・スコア・描画）は挙動が繊細なので、リファクタ時は
   ブラウザで実際に遊んで確認する。型が通るだけでは不十分。
 ```
 
-同じ場所に追加する行:
+その直後に追加する行:
 
 ```markdown
 - 譜面の診断・改善は chart-feel スキル（`.claude/skills/chart-feel/`）を使う。
   合格基準は `bake-chart.py` の自動検査。譜面 JSON を直接編集しない。
+  譜面を大きく変えたとき（`SECTIONS` の倍率、`DIFFS` の target を1割超、
+  `classify` / `assign_lanes` のロジック）はプレイ確認も勧める。自動検査は
+  生成の意図どおりかしか見ておらず、意図が曲に合っているかは測れないため。
 ```
 
 - [ ] **Step 2: 改善ループを一周して動作確認する**
@@ -511,5 +561,5 @@ Expected: 型エラーなしで完了(TS は触っていないので形式的な
 
 ```bash
 git add AGENTS.md
-git commit -m "docs: プレイ確認の規約を chart-feel スキル運用に置き換え"
+git commit -m "docs: chart-feel スキルの運用を規約に追記"
 ```
