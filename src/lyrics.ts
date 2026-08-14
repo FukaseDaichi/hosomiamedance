@@ -63,7 +63,7 @@ export const LYRICS: LyricLine[] = [
 /** 時刻 t に表示すべき行のインデックス。表示しないときは -1。 */
 export function lineAt(t: number): number {
   if (t < 0) return -1
-  // 行数が40なので線形走査で足りる
+  // 行数が39なので線形走査で足りる
   let idx = -1
   for (let i = 0; i < LYRICS.length; i++) {
     if (LYRICS[i].t > t) break

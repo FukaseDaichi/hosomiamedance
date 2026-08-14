@@ -114,7 +114,14 @@ function ensureEngine(): Engine {
 
 /** mp3 の取得だけ先に始める。AudioContext は要らないので起動直後に呼べる。 */
 export function prefetchSong() {
-  if (!songBytes) songBytes = fetch(SONG_URL).then((r) => r.arrayBuffer())
+  if (!songBytes) {
+    songBytes = fetch(SONG_URL).then((r) => {
+      // ステータスを見ずに進むと、404 の HTML 本文を decodeAudioData に渡して
+      // 意味の分からない EncodingError になる。ここで原因を語らせる
+      if (!r.ok) throw new Error(`曲の取得に失敗しました: ${SONG_URL} (status ${r.status})`)
+      return r.arrayBuffer()
+    })
+  }
 }
 
 /**
@@ -132,6 +139,9 @@ export function loadSong(): Promise<void> {
         const bytes = await songBytes!
         // decodeAudioData は渡した ArrayBuffer を detach するので、コピーを渡す
         songBuffer = await e.ctx.decodeAudioData(bytes.slice(0))
+        // デコードに使い終わった生の ArrayBuffer(3.3MB)を保持し続けない。
+        // 再取得が要る場合は prefetchSong() が面倒を見る
+        songBytes = null
       } catch (err) {
         // 失敗したキャッシュ(fetch の Promise)を捨てて、次回呼び出しで再取得させる
         songBytes = null
