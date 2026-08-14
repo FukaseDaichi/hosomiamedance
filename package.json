@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "bake-sprites": "python3 scripts/bake-sprites.py"
+    "bake-sprites": "uv run scripts/bake-sprites.py"
   },
   "dependencies": {
     "react": "^18.3.1",

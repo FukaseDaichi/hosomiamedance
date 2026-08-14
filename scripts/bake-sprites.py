@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["pillow", "numpy"]
+# ///
 """hosomi.gif から配信用スプライト public/assets/hosomi/*.png を生成する。
 
 1. 緑背景(グリーンバック)をクロマキーで透過
@@ -9,8 +13,8 @@
 3 は元々 rain-stage.js がロード時に毎回 JS で行っていた処理。ビルド時に焼き込むことで
 実行時コスト(128枚 x 480x270 のピクセル走査)を無くし、同時に転送量を 10MB -> 5.5MB に削減する。
 
-使い方: python3 scripts/bake-sprites.py [hosomi.gif] [public/assets/hosomi]
-依存:   pip install pillow numpy
+使い方: uv run scripts/bake-sprites.py [hosomi.gif] [public/assets/hosomi]
+依存:   上の PEP 723 メタデータに宣言済み。uv が自動で解決する。
 """
 import os
 import sys
