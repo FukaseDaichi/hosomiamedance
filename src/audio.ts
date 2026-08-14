@@ -63,6 +63,8 @@ let engine: Engine | null = null
 let songState: SongState | null = null
 let songBuffer: AudioBuffer | null = null
 let songBytes: Promise<ArrayBuffer> | null = null
+/** loadSong の同時呼び出しをまとめて 1 回の取得・デコードにするためのキャッシュ */
+let songLoadPromise: Promise<void> | null = null
 
 function ensureEngine(): Engine {
   if (engine) return engine
@@ -115,14 +117,31 @@ export function prefetchSong() {
   if (!songBytes) songBytes = fetch(SONG_URL).then((r) => r.arrayBuffer())
 }
 
-/** mp3 をデコードして再生できる状態にする。ユーザー操作のあとに呼ぶこと。 */
-export async function loadSong(): Promise<void> {
-  if (songBuffer) return
-  prefetchSong()
-  const e = ensureEngine()
-  const bytes = await songBytes!
-  // decodeAudioData は渡した ArrayBuffer を detach するので、コピーを渡す
-  songBuffer = await e.ctx.decodeAudioData(bytes.slice(0))
+/**
+ * mp3 をデコードして再生できる状態にする。ユーザー操作のあとに呼ぶこと。
+ * 取得やデコードに失敗した場合はキャッシュを捨て、次回の呼び出しで再取得できるようにする。
+ * 呼び出しが重なった場合は同じ Promise を返し、decodeAudioData の並行実行を避ける。
+ */
+export function loadSong(): Promise<void> {
+  if (songBuffer) return Promise.resolve()
+  if (!songLoadPromise) {
+    songLoadPromise = (async () => {
+      try {
+        prefetchSong()
+        const e = ensureEngine()
+        const bytes = await songBytes!
+        // decodeAudioData は渡した ArrayBuffer を detach するので、コピーを渡す
+        songBuffer = await e.ctx.decodeAudioData(bytes.slice(0))
+      } catch (err) {
+        // 失敗したキャッシュ(fetch の Promise)を捨てて、次回呼び出しで再取得させる
+        songBytes = null
+        throw err
+      } finally {
+        songLoadPromise = null
+      }
+    })()
+  }
+  return songLoadPromise
 }
 
 export function isSongReady(): boolean {

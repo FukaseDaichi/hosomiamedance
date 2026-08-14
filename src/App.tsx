@@ -200,7 +200,14 @@ export default class App extends Component<AppProps, AppState> {
     HAudio.wake()
     if (!HAudio.isSongReady()) {
       this.setState({ phase: 'loading' })
-      await HAudio.loadSong()
+      try {
+        await HAudio.loadSong()
+      } catch (err) {
+        // 取得やデコードに失敗。ローディング画面に閉じ込めず選曲画面へ戻す
+        console.error('曲のロードに失敗しました', err)
+        this.setState({ phase: 'select' })
+        return
+      }
     }
     HAudio.sfx('start')
     const diff = HAudio.DIFFICULTIES[idx]
