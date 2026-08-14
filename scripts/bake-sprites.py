@@ -1,46 +1,55 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.9"
-# dependencies = ["pillow", "numpy"]
+# dependencies = ["av", "pillow", "numpy"]
 # ///
-"""hosomi.gif から配信用スプライト public/assets/hosomi/*.png を生成する。
+"""hosomi.mp4 から配信用スプライト public/assets/hosomi/*.webp を生成する。
 
-1. 緑背景(グリーンバック)をクロマキーで透過
-2. 8秒 = 16フレーム/秒 で 8 モーションに分割しリネーム
-3. 3x3 平均でディザノイズを均し、体内部の 1px 透明穴を埋める
-4. 透明部にエッジ色を 2px にじませ(alpha bleed)、残りを 0 で潰して PNG 圧縮を効かせる
+1. 緑背景(グリーンバック)をソフトアルファでクロマキー抜き
+2. 縁の半透明画素から背景色を逆算除去(unmix)して緑かぶりを消す
+3. 8秒 x 24fps = 192 フレームから各モーション 16 枚を等間隔サンプリング
+4. 透明部にエッジ色を 2px にじませ(alpha bleed)、残りを 0 で潰して圧縮を効かせる
+5. 1280x720 でキーイングしてから 960x540 に縮小(縁のアンチエイリアスを稼ぐ)
+6. WebP q90 で保存(PNG 比 1/4 のサイズで見分けがつかない。計約 3.5MB)
 
-3 は元々 rain-stage.js がロード時に毎回 JS で行っていた処理。ビルド時に焼き込むことで
-実行時コスト(128枚 x 480x270 のピクセル走査)を無くし、同時に転送量を 10MB -> 5.5MB に削減する。
+旧版は 256 色 GIF が入力だったためディザ均しと穴埋めをしていたが、mp4 は
+連続階調なので不要になった。代わりに h264 の非可逆圧縮で縁がぼけるぶん、
+二値ではなくソフトアルファで抜く。
 
-使い方: uv run scripts/bake-sprites.py [hosomi.gif] [public/assets/hosomi]
+使い方: uv run scripts/bake-sprites.py [hosomi.mp4] [public/assets/hosomi]
 依存:   上の PEP 723 メタデータに宣言済み。uv が自動で解決する。
 """
 import os
 import sys
 
+import av
 import numpy as np
-from PIL import Image, ImageSequence
+from PIL import Image
 
-# 8秒のGIFに 8 モーションが 1 秒ずつ並んでいる
+# 8秒の動画に 8 モーションが 1 秒ずつ並んでいる
 ANIMS = ['IDLE', 'LEFT_STEP', 'RIGHT_STEP', 'JUMP', 'DOWN', 'SPECIAL_A', 'SPECIAL_B', 'SPECIAL_C']
 FRAMES_PER_ANIM = 16
+SRC_FPS = 24
+OUT_SIZE = (960, 540)
 
-# G が R,B より この値以上 大きい画素を背景とみなす。
-# 元GIFのパレット上、背景の最小 diff は 23、前景の最大 diff は 10 と離れているので
-# その間を取れば誤判定は起きない。
-GREEN_THRESHOLD = 16
+# g - max(r,b) がこの範囲で alpha 1 -> 0 に遷移する。実測では前景 <= 10、
+# 背景 >= 40 に分離しており、間に落ちるのは h264 で滲んだ縁の画素だけ。
+DIFF_FG = 10
+DIFF_BG = 40
 
 
-def chroma_key(frame):
-    """緑背景を alpha=0 にした RGBA 配列を返す。"""
-    arr = np.array(frame.convert('RGBA'))
-    r = arr[..., 0].astype(np.int16)
-    g = arr[..., 1].astype(np.int16)
-    b = arr[..., 2].astype(np.int16)
-    is_bg = (g - np.maximum(r, b)) >= GREEN_THRESHOLD
-    arr[..., 3] = np.where(is_bg, 0, arr[..., 3])
-    return arr
+def key_frame(rgb, bg_color):
+    """緑背景をソフトアルファで抜き、縁の緑かぶりを除去した RGBA 配列を返す。"""
+    arr = rgb.astype(np.float64)
+    d = arr[..., 1] - np.maximum(arr[..., 0], arr[..., 2])
+    alpha = np.clip((DIFF_BG - d) / (DIFF_BG - DIFF_FG), 0.0, 1.0)
+
+    # 半透明画素は 前景色*a + 背景色*(1-a) の混合なので背景色を逆算で取り除く
+    a3 = alpha[..., None]
+    unmixed = np.where(a3 > 0, (arr - bg_color * (1 - a3)) / np.where(a3 > 0, a3, 1), arr)
+    unmixed = np.clip(unmixed, 0, 255)
+
+    return unmixed, alpha
 
 
 def neighbors_sum(arr, mask):
@@ -60,50 +69,52 @@ def neighbors_sum(arr, mask):
     return acc, cnt
 
 
-def bake(arr):
-    """平滑化・穴埋め・alpha bleed を適用した RGBA 配列を返す。"""
-    rgb = arr[..., :3].astype(np.float64)
-    alpha = arr[..., 3]
-    mask = (alpha > 0).astype(np.float64)
-
-    acc, cnt = neighbors_sum(rgb, mask)
-    avg = acc / np.where(cnt > 0, cnt, 1)[..., None]
-
-    # 元が不透明、または不透明な近傍が 6 個以上(=体内部の穴)なら平均色で不透明化
-    keep = (alpha > 0) | (cnt >= 6)
-    out_rgb = np.where(keep[..., None], avg, rgb)
-    out_a = np.where(keep, 255, 0).astype(np.uint8)
-
-    # 透明部にエッジ色をにじませ、GPU のバイリニア補間で縁に背景色が滲むのを防ぐ
-    cur_rgb = out_rgb
-    cur_mask = (out_a > 0).astype(np.float64)
+def bleed(rgb, alpha):
+    """透明部にエッジ色をにじませ、GPU のバイリニア補間で縁に背景色が滲むのを防ぐ。"""
+    cur_rgb = rgb
+    cur_mask = (alpha > 0).astype(np.float64)
     for _ in range(2):
-        acc2, cnt2 = neighbors_sum(cur_rgb, cur_mask)
-        grow = (cnt2 > 0) & (cur_mask == 0)
-        cur_rgb = np.where(grow[..., None], acc2 / np.where(cnt2 > 0, cnt2, 1)[..., None], cur_rgb)
+        acc, cnt = neighbors_sum(cur_rgb, cur_mask)
+        grow = (cnt > 0) & (cur_mask == 0)
+        cur_rgb = np.where(grow[..., None], acc / np.where(cnt > 0, cnt, 1)[..., None], cur_rgb)
         cur_mask = np.where(grow, 1.0, cur_mask)
-
     # にじみが届かない遠方の透明部は 0 で潰す(一様な値の方が PNG が縮む)
-    cur_rgb = np.where(((out_a == 0) & (cur_mask == 0))[..., None], 0.0, cur_rgb)
+    cur_rgb = np.where(((alpha == 0) & (cur_mask == 0))[..., None], 0.0, cur_rgb)
+    return cur_rgb
 
-    return np.concatenate([np.round(cur_rgb).astype(np.uint8), out_a[..., None]], axis=2)
+
+def bake(rgb, bg_color):
+    unmixed, alpha = key_frame(rgb, bg_color)
+    out_rgb = bleed(unmixed, alpha)
+    rgba = np.concatenate(
+        [np.round(out_rgb).astype(np.uint8), np.round(alpha * 255).astype(np.uint8)[..., None]],
+        axis=2,
+    )
+    return Image.fromarray(rgba).resize(OUT_SIZE, Image.LANCZOS)
 
 
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else 'hosomi.gif'
+    src = sys.argv[1] if len(sys.argv) > 1 else 'hosomi.mp4'
     dst = sys.argv[2] if len(sys.argv) > 2 else os.path.join('public', 'assets', 'hosomi')
     os.makedirs(dst, exist_ok=True)
 
-    frames = [chroma_key(f) for f in ImageSequence.Iterator(Image.open(src))]
-    expected = len(ANIMS) * FRAMES_PER_ANIM
+    container = av.open(src)
+    frames = [f.to_ndarray(format='rgb24') for f in container.decode(video=0)]
+    expected = len(ANIMS) * SRC_FPS
     if len(frames) != expected:
         raise SystemExit(f'{src}: expected {expected} frames, got {len(frames)}')
 
-    for i, arr in enumerate(frames):
-        name = f'{ANIMS[i // FRAMES_PER_ANIM]}_{i % FRAMES_PER_ANIM:02d}.png'
-        Image.fromarray(bake(arr)).save(os.path.join(dst, name), optimize=True)
+    # 背景色は四隅の平均から採る(unmix 用)
+    corners = np.concatenate([frames[0][:8, :8], frames[0][:8, -8:], frames[0][-8:, :8], frames[0][-8:, -8:]])
+    bg_color = corners.reshape(-1, 3).mean(axis=0)
 
-    print(f'wrote {len(frames)} sprites to {dst}')
+    for a, anim in enumerate(ANIMS):
+        for k in range(FRAMES_PER_ANIM):
+            i = a * SRC_FPS + int(k * SRC_FPS / FRAMES_PER_ANIM)
+            img = bake(frames[i], bg_color)
+            img.save(os.path.join(dst, f'{anim}_{k:02d}.webp'), quality=90, method=6)
+
+    print(f'wrote {len(ANIMS) * FRAMES_PER_ANIM} sprites to {dst}')
 
 
 if __name__ == '__main__':

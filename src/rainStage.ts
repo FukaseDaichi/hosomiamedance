@@ -312,7 +312,7 @@ export class RainStage {
   private async loadAnim(a: AnimName) {
     const frames = await Promise.all(
       Array.from({ length: FRAMES }, (_, f) =>
-        this.loadTexture(`${import.meta.env.BASE_URL}assets/hosomi/${a}_${String(f).padStart(2, '0')}.png`),
+        this.loadTexture(`${import.meta.env.BASE_URL}assets/hosomi/${a}_${String(f).padStart(2, '0')}.webp`),
       ),
     )
     this.textures[a] = frames

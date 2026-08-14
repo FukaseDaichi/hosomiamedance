@@ -3,5 +3,3 @@ dist/
 .DS_Store
 *.local
 
-# スプライトの原本。public/assets/hosomi/ の再生成(npm run bake-sprites)に使う
-hosomi.gif

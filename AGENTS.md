@@ -10,7 +10,7 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
 | `npm run dev` | 開発サーバー |
 | `npm run build` | `tsc --noEmit` + 本番ビルド。CI と同じ |
 | `npm run preview` | 本番ビルドをローカル配信 |
-| `npm run bake-sprites` | `hosomi.gif` からスプライトを再生成 |
+| `npm run bake-sprites` | `hosomi.mp4` からスプライトを再生成 |
 
 変更を出す前に `npm run build` を通すこと。型エラーはここでしか出ない。
 
@@ -22,8 +22,9 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
 | `src/audio.ts` | WebAudio による曲・雨音・効果音の合成。譜面もここで生成 |
 | `src/rainStage.ts` | Three.js の雨シーンとスプライトアニメーション |
 | `src/styles.css` | 全画面のスタイル |
-| `public/assets/hosomi/` | スプライト 128 枚。**生成物なので直接編集しない** |
-| `scripts/bake-sprites.py` | GIF → 透過スプライトの変換パイプライン |
+| `public/assets/hosomi/` | スプライト 128 枚(WebP)。**生成物なので直接編集しない** |
+| `scripts/bake-sprites.py` | mp4 → 透過スプライトの変換パイプライン |
+| `hosomi.mp4` | スプライトの原本(グリーンバック動画)。リポジトリにコミット済み |
 
 ## 踏みやすい落とし穴
 
@@ -33,8 +34,8 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
   `/assets/...` と絶対パスで書くと本番だけ 404 になる。
 - **`<StrictMode>` は意図的に付けていない**（`src/main.tsx`）。開発時の二重マウントで
   WebGL コンテキストと AudioContext が二重に生成されるため。追加しない。
-- **`bake-sprites` の入力 `hosomi.gif` はリポジトリに含まれていない**（ローカルにも現存しない）。
-  スプライトを作り直すには元 GIF を別途用意する。通常の開発では走らせる必要はない。
+- `bake-sprites` の入力はリポジトリ直下の `hosomi.mp4`（コミット済み）。通常の開発では
+  走らせる必要はない。WebP エンコード(method=6)のため全 128 枚で数分かかる。
 - 見出しの「いろは餅」フォントは数字・英字のグリフを持たないため、`unicode-range` で
   かな・漢字・全角のみに適用している。数字が別フォントで出るのは仕様。
 
