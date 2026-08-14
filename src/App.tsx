@@ -156,6 +156,7 @@ export default class App extends Component<AppProps, AppState> {
   private lastRain: number | null = null
 
   componentDidMount() {
+    HAudio.prefetchSong()
     if (this.stageHostRef.current) {
       this.stage = new RainStage(this.stageHostRef.current)
       void this.stage.ready.then(() => this.setState({ phase: 'title' }))
@@ -176,8 +177,9 @@ export default class App extends Component<AppProps, AppState> {
 
   /** 判定窓(秒)。easyJudge で広がる。 */
   private windows() {
-    const easy = this.props.easyJudge ?? false
-    return { perf: easy ? 0.09 : 0.06, good: easy ? 0.18 : 0.13 }
+    const d = HAudio.DIFFICULTIES[this.state.songIdx]
+    const k = (this.props.easyJudge ?? false) ? 1.5 : 1
+    return { perf: d.perfWindow * k, good: d.goodWindow * k }
   }
 
   private onPointerDown = () => HAudio.wake()
@@ -192,19 +194,23 @@ export default class App extends Component<AppProps, AppState> {
 
   private backToSelect = () => this.setState({ phase: 'select' })
 
-  private replay = () => this.startGame(this.state.songIdx)
+  private replay = () => void this.startGame(this.state.songIdx)
 
-  private startGame(idx: number) {
+  private async startGame(idx: number) {
     HAudio.wake()
+    if (!HAudio.isSongReady()) {
+      this.setState({ phase: 'loading' })
+      await HAudio.loadSong()
+    }
     HAudio.sfx('start')
-    const song = HAudio.SONGS[idx]
-    this.chart = HAudio.chart(idx).map((n) => ({ t: n.t, lane: n.lane, state: 0 as NoteState }))
-    this.endAt = this.chart[this.chart.length - 1].t + 2.4
+    const diff = HAudio.DIFFICULTIES[idx]
+    this.chart = HAudio.chart(diff.id).map((n) => ({ t: n.t, lane: n.lane, state: 0 as NoteState }))
+    this.endAt = HAudio.SONG_END
     this.effects = []
     this.flash = [0, 0, 0, 0]
-    HAudio.startSong(idx)
+    HAudio.startSong()
     if (this.stage) {
-      this.stage.setBPM(song.bpm)
+      this.stage.setBPM(HAudio.BPM)
       this.stage.setDancing(true)
     }
     this.setState({
@@ -237,7 +243,7 @@ export default class App extends Component<AppProps, AppState> {
     if (p === 'title' && (e.key === ' ' || e.key === 'Enter')) {
       this.toSelect()
     } else if (p === 'select' && ['1', '2', '3'].includes(e.key)) {
-      this.startGame(Number(e.key) - 1)
+      void this.startGame(Number(e.key) - 1)
     } else if (p === 'game') {
       if (e.key === 'Escape') {
         HAudio.stop()
@@ -247,7 +253,7 @@ export default class App extends Component<AppProps, AppState> {
         this.hitLane(LANE_KEYS[e.key])
       }
     } else if (p === 'result') {
-      if (e.key === 'Enter') this.startGame(this.state.songIdx)
+      if (e.key === 'Enter') void this.startGame(this.state.songIdx)
       else if (e.key === 'Escape') this.setState({ phase: 'select' })
     }
   }
@@ -359,7 +365,8 @@ export default class App extends Component<AppProps, AppState> {
     const laneW = cw / 4
     const recY = 104
     const r = Math.min(laneW * 0.3, 34)
-    const speed = 300 * (this.props.noteSpeed ?? 1)
+    const diff = HAudio.DIFFICULTIES[this.state.songIdx]
+    const speed = diff.noteSpeed * (this.props.noteSpeed ?? 1)
 
     for (let i = 1; i < 4; i++) {
       g.strokeStyle = 'rgba(255,255,255,0.07)'
@@ -413,7 +420,7 @@ export default class App extends Component<AppProps, AppState> {
 
   render() {
     const s = this.state
-    const songName = HAudio.SONGS[s.songIdx]?.name ?? ''
+    const diff = HAudio.DIFFICULTIES[s.songIdx]
 
     return (
       <div className="stage">
@@ -430,7 +437,7 @@ export default class App extends Component<AppProps, AppState> {
                 <div className="score-label">スコア</div>
                 <div className="score-value">{s.score}</div>
               </div>
-              <div className="song-chip">♪ {songName}</div>
+              <div className="song-chip">♪ {HAudio.SONG_TITLE} — {diff.name}</div>
             </div>
 
             {s.combo >= 2 && (
@@ -476,17 +483,17 @@ export default class App extends Component<AppProps, AppState> {
 
         {s.phase === 'select' && (
           <div className="screen screen--center select-screen">
-            <div className="select-heading">きょくを えらぼう</div>
+            <div className="select-heading">むずかしさを えらぼう</div>
             <div className="song-list">
-              {HAudio.SONGS.map((song, i) => (
-                <button type="button" key={song.id} className="song-card" onClick={() => this.startGame(i)}>
+              {HAudio.DIFFICULTIES.map((d, i) => (
+                <button type="button" key={d.id} className="song-card" onClick={() => void this.startGame(i)}>
                   <div className="song-key">キー {i + 1}</div>
-                  <div className="song-name">{song.name}</div>
-                  <div className="song-desc">{song.desc}</div>
+                  <div className="song-name">{d.name}</div>
+                  <div className="song-desc">{d.desc}</div>
                   <div className="song-meta">
-                    <span className="song-bpm">BPM {song.bpm}</span>
+                    <span className="song-bpm">BPM {HAudio.BPM}</span>
                     <span className="song-hearts">
-                      {'♥'.repeat(song.hearts) + '♡'.repeat(3 - song.hearts)}
+                      {'♥'.repeat(d.hearts) + '♡'.repeat(3 - d.hearts)}
                     </span>
                   </div>
                 </button>
