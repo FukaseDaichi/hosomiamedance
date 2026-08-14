@@ -49,6 +49,14 @@ GAP_LANE = 2 * S16        # 同一レーンは全難易度で8分あける
 # 上げすぎると弱い音まで拾って音付け(原則1)を壊す。オンセット整合検査が上限の見張り
 CONT_BONUS = 0.25
 
+# 区間 quota を按分するサブウィンドウの幅(小節)。連続性ボーナスは
+# rich-get-richer に働くため、区間(最長16小節)まるごとで貪欲を回すと
+# 強い核の周りのストリームが quota を吸い尽くし、区間後半が長い無音地帯になる。
+# 密度検査は区間単位なのでこの穴を見逃す。サブウィンドウごとに quota を配って
+# 貪欲を回すことで、ストリームは窓内で育ちつつ穴が開かなくなる。
+# 1小節。2小節にすると窓内の偏りが残り、ブレイク以外にも 4.2-4.6 秒の穴が出る
+SUBWINDOW_BARS = 1
+
 # オンセット整合検査の閾値。classify の強さがこれ未満のノーツは「音が無い所を
 # 叩かせている」とみなす。採点に使う classify はノーツ選定と同じ関数なので、
 # この検査は自己参照(theory.md 原則1)。CONT_BONUS の暴走を止める安全網
@@ -178,31 +186,49 @@ def select_times(f, cfg):
             _, s = classify(f, t)
             strength[i] = (s, t)
 
+        # 区間をサブウィンドウに割り、quota を小節数で按分する。
+        # 端数は largest remainder 法で配り、合計が quota と一致するようにする
+        windows = [(w0, min(w0 + SUBWINDOW_BARS, b1))
+                   for w0 in range(b0, b1, SUBWINDOW_BARS)]
+        bars = [w1 - w0 for w0, w1 in windows]
+        raw = [quota * n / sum(bars) for n in bars]
+        sub_quota = [int(x) for x in raw]
+        rest = quota - sum(sub_quota)
+        for j in sorted(range(len(raw)), key=lambda j: raw[j] - sub_quota[j], reverse=True)[:rest]:
+            sub_quota[j] += 1
+
         # 逐次貪欲: 選択済みの隣にいる候補に CONT_BONUS を加点しながら、
-        # 最高スコアの点から取っていく。強い音を核にストリームが育つ
+        # 最高スコアの点から取っていく。強い音を核にストリームが育つ。
+        # 候補はサブウィンドウ内に限るが taken_idx は区間を通して持ち回るので、
+        # 窓境界をまたいだストリームもそのまま伸びる
         taken_idx: set[int] = set()
-        dropped: set[int] = set()  # fits に落ちた点。加点の核にはしない
-        taken = 0
-        while taken < quota:
-            best_i, best_score = None, -1.0
-            for i, (s, _t) in strength.items():
-                if i in taken_idx or i in dropped:
+        carry = 0  # 窓が埋まりきらず余った分は次の窓へ送る
+        for (w0, w1), q in zip(windows, sub_quota):
+            lo, hi = bar_to_idx(w0), bar_to_idx(w1)
+            dropped: set[int] = set()  # fits に落ちた点。加点の核にはしない
+            want = q + carry
+            taken = 0
+            while taken < want:
+                best_i, best_score = None, -1.0
+                for i, (s, _t) in strength.items():
+                    if not (lo <= i < hi) or i in taken_idx or i in dropped:
+                        continue
+                    bonus = CONT_BONUS * (
+                        (i - cfg["step"] in taken_idx) + (i + cfg["step"] in taken_idx)
+                    )
+                    if s + bonus > best_score:
+                        best_i, best_score = i, s + bonus
+                if best_i is None:
+                    break
+                _s, t = strength[best_i]
+                if not fits(t):
+                    dropped.add(best_i)
                     continue
-                bonus = CONT_BONUS * (
-                    (i - cfg["step"] in taken_idx) + (i + cfg["step"] in taken_idx)
-                )
-                if s + bonus > best_score:
-                    best_i, best_score = i, s + bonus
-            if best_i is None:
-                break
-            _s, t = strength[best_i]
-            if not fits(t):
-                dropped.add(best_i)
-                continue
-            taken_idx.add(best_i)
-            chosen.append(t)
-            chosen_sorted = sorted(chosen)
-            taken += 1
+                taken_idx.add(best_i)
+                chosen.append(t)
+                chosen_sorted = sorted(chosen)
+                taken += 1
+            carry = want - taken
 
     return sorted(chosen)
 
