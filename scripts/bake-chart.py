@@ -44,6 +44,10 @@ DIFFS = {
 }
 GAP_LANE = 2 * S16        # 同一レーンは全難易度で8分あける
 
+# レーン分布の許容範囲(%)。どのレーンも死なせず、どれか1つに寄せすぎない
+LANE_MIN_PCT = 12.0
+LANE_MAX_PCT = 50.0
+
 
 # (開始小節, 終了小節(排他), 密度倍率)。設計書「曲の構成」表に対応する。
 SECTIONS = [
@@ -109,9 +113,11 @@ def classify(f, t):
     m = sample(f, "mel", t)
     h = sample(f, "hat", t)
     # スネアは低中域と高域が同時に立つ。片方だけならスネアではない
-    # 重みは実測調整値。デフォルト(1.2, 0.6)だとキック(↓)が easy/normal で
-    # 54%超に偏り Step 7 の検査(1レーン50%超は不可)に落ちたため上げてある。
-    scores = {"kick": k, "snare": min(b, h) * 1.6, "mel": m, "hat": h * 0.85}
+    # 重みは実測調整値。デフォルト(1.0, 1.0, 1.0, 1.0)だとキック/スネア(↓/↑)が
+    # 8割前後を占め、メロディ/ハイハット由来の←/→がほぼ死ぬ。
+    # verify() のレーン分布検査(各12%以上・50%以下)を通るよう、
+    # メロディを上げ・スネアを下げて←/→の出現率を引き上げてある。
+    scores = {"kick": k, "snare": min(b, h) * 1.3, "mel": m * 1.4, "hat": h * 1.0}
     kind = max(scores, key=lambda x: scores[x])
     return kind, scores[kind]
 
@@ -131,8 +137,12 @@ def select_times(f, cfg):
 
     def fits(t):
         # 全体の最小間隔。既に選んだ点との距離を見る
+        # 時刻は小数第4位に丸められるため、丸め後にちょうど閾値と一致する
+        # 隣接グリッド点まで誤って弾かないよう、許容を 1e-3 に広げてある
+        # (1e-6 だと 0.3846 のような丸め値が gap_all の生の値を僅かに
+        # 下回るだけで却下され、実効の最小間隔が設計より粗くなっていた)
         for c in chosen_sorted:
-            if abs(c - t) < cfg["gap_all"] - 1e-6:
+            if abs(c - t) < cfg["gap_all"] - 1e-3:
                 return False
             if c > t + 1.0:
                 break
@@ -201,7 +211,8 @@ def assign_lanes(f, times):
                 prev_cent = c
 
             # 同一レーンが近すぎる、または3連続になるなら最も長く空いているレーンへ
-            too_close = t - last_lane_t[lane] < GAP_LANE - 1e-6
+            # (丸め誤差の許容は fits() と同じ理由で 1e-3)
+            too_close = t - last_lane_t[lane] < GAP_LANE - 1e-3
             too_many = lane == prev_lane and run >= 2
             if too_close or too_many:
                 lane = int(np.argmin(last_lane_t))
@@ -242,6 +253,19 @@ def verify(data: dict) -> list[str]:
         if not (target * 0.85 <= len(ns) <= target * 1.15):
             bad.append(f"{key}: ノーツ数 {len(ns)} が目標 {target} の±15%を外れている")
 
+        # レーン分布。←/→ が死んだり、↓/↑ だけに偏ったりしていないか
+        lane_count = [0, 0, 0, 0]
+        for _t, lane in ns:
+            if 0 <= lane <= 3:
+                lane_count[lane] += 1
+        for lane, c in enumerate(lane_count):
+            pct = 100 * c / len(ns) if ns else 0
+            if not (LANE_MIN_PCT <= pct <= LANE_MAX_PCT):
+                bad.append(
+                    f"{key}: レーン{lane}の比率 {pct:.1f}% が許容"
+                    f"[{LANE_MIN_PCT}, {LANE_MAX_PCT}]% を外れている"
+                )
+
         last_lane = [-9.0] * 4
         prev_t = -9.0
         for t, lane in ns:
@@ -257,10 +281,12 @@ def verify(data: dict) -> list[str]:
             if t < prev_t:
                 bad.append(f"{key}: 時刻が昇順でない {prev_t} -> {t}")
                 break
-            if t - prev_t < cfg["gap_all"] - 1e-6 and prev_t > 0:
+            # 許容は select_times/assign_lanes の fits()・too_close と揃えて 1e-3
+            # (丸め後の値で判定するため。詳細は fits() のコメント参照)
+            if t - prev_t < cfg["gap_all"] - 1e-3 and prev_t > 0:
                 bad.append(f"{key}: 全体の最小間隔違反 {prev_t} -> {t}")
                 break
-            if t - last_lane[lane] < GAP_LANE - 1e-6:
+            if t - last_lane[lane] < GAP_LANE - 1e-3:
                 bad.append(f"{key}: 同一レーン({lane})の最小間隔違反 {last_lane[lane]} -> {t}")
                 break
             # 固定ギミック以外は16分グリッドに乗っていること
