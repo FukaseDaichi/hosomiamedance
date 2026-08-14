@@ -4,8 +4,9 @@
 
 **遊ぶ → https://fukasedaichi.github.io/hosomiamedance/**
 
-矢印キー(←↓↑→)でノーツを叩き、コンボを繋いでスペシャル演出を出す。曲・効果音は音源ファイルを持たず、
-すべて WebAudio でその場で合成している。背景は Three.js の 3D シーン。
+矢印キー(←↓↑→)でノーツを叩き、コンボを繋いでスペシャル演出を出す。曲は「ホソミアメダンス」1曲で、
+EASY / NORMAL / HARD の3難易度。譜面は音源を解析して事前に焼いてある。効果音と雨音は WebAudio 合成。
+背景は Three.js の 3D シーン。
 
 ## 開発
 
@@ -20,6 +21,7 @@ npm run dev
 | `npm run build`        | 型チェック(`tsc --noEmit`)+ 本番ビルド |
 | `npm run preview`      | 本番ビルドをローカル配信               |
 | `npm run bake-sprites` | `hosomi.gif` からスプライトを再生成    |
+| `npm run bake-chart`   | `hosomiamedance.mp3` から譜面を再生成  |
 
 `vite.config.ts` の `base` は GitHub Pages のプロジェクトページ用に `/hosomiamedance/` を指している。
 そのため dev / preview でも `http://localhost:5173/hosomiamedance/` を開くこと。
@@ -30,9 +32,12 @@ npm run dev
 | ------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `src/App.tsx`             | 画面遷移(ローディング→タイトル→曲セレクト→ゲーム→リザルト)、判定・スコア・コンボ、ノーツレーンの Canvas 描画 |
 | `src/audio.ts`            | WebAudio で曲・雨音・効果音を生成。譜面もここから決定的に組み立てる                                          |
+| `src/lyrics.ts`           | 歌詞と発声時刻(Whisper 実測)                                                                                 |
+| `src/charts.json`         | `bake-chart.py` が焼いた譜面(EASY/NORMAL/HARD)。**生成物なので直接編集しない**                               |
 | `src/rainStage.ts`        | Three.js の雨シーン。雨粒・水たまり・波紋・ハート・キャラのスプライトアニメーション                          |
 | `src/styles.css`          | 全画面のスタイル                                                                                             |
 | `scripts/bake-sprites.py` | GIF → 透過スプライト の変換パイプライン                                                                      |
+| `scripts/bake-chart.py`   | 音源解析 → 譜面の生成パイプライン                                                                            |
 
 ## スプライトについて
 
