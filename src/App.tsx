@@ -1,5 +1,6 @@
 import { Component, createRef } from 'react'
 import * as HAudio from './audio'
+import { LYRICS, lineAt } from './lyrics'
 import { RainStage, type Direction, type SpecialTier } from './rainStage'
 
 type Phase = 'loading' | 'title' | 'select' | 'game' | 'result'
@@ -54,6 +55,12 @@ interface AppState {
   specialKey: number
   nextMilestone: number
   rank: Rank | null
+  /** 表示中の歌詞の行番号。-1 なら非表示 */
+  lyricIdx: number
+  /** フェードアウト中の歌詞の行番号。-1 ならなし */
+  lyricOut: number
+  /** フェードアウトのアニメーションを鳴らし直すための再マウント用キー */
+  lyricOutKey: number
 }
 
 const LANE_KEYS: Record<string, number> = { ArrowLeft: 0, ArrowDown: 1, ArrowUp: 2, ArrowRight: 3 }
@@ -141,6 +148,9 @@ export default class App extends Component<AppProps, AppState> {
     specialKey: 0,
     nextMilestone: 10,
     rank: null,
+    lyricIdx: -1,
+    lyricOut: -1,
+    lyricOutKey: 0,
   }
 
   private readonly stageHostRef = createRef<HTMLDivElement>()
@@ -232,6 +242,8 @@ export default class App extends Component<AppProps, AppState> {
       judge: null,
       special: null,
       nextMilestone: 10,
+      lyricIdx: -1,
+      lyricOut: -1,
     })
   }
 
@@ -326,6 +338,19 @@ export default class App extends Component<AppProps, AppState> {
     if (this.state.phase !== 'game') return
 
     const t = HAudio.time()
+
+    // 毎フレーム setState すると重いので、行が変わったときだけ更新する
+    const li = lineAt(t)
+    if (li !== this.state.lyricIdx) {
+      const prev = this.state.lyricIdx
+      this.setState({
+        lyricIdx: li,
+        // 出ていた行があればフェードアウトさせる。key を進めて鳴らし直す
+        lyricOut: prev >= 0 ? prev : this.state.lyricOut,
+        lyricOutKey: prev >= 0 ? this.state.lyricOutKey + 1 : this.state.lyricOutKey,
+      })
+    }
+
     const w = this.windows()
     let missed = 0
     for (const n of this.chart) {
@@ -464,6 +489,17 @@ export default class App extends Component<AppProps, AppState> {
             {s.special && (
               <div key={s.specialKey} className="special-banner">
                 スペシャル♥ {s.special.name}
+              </div>
+            )}
+
+            {s.lyricOut >= 0 && (
+              <div key={`out-${s.lyricOutKey}`} className="lyric lyric--out">
+                {LYRICS[s.lyricOut].text}
+              </div>
+            )}
+            {s.lyricIdx >= 0 && (
+              <div key={s.lyricIdx} className="lyric">
+                {LYRICS[s.lyricIdx].text}
               </div>
             )}
 
