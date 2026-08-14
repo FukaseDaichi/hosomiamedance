@@ -1,0 +1,311 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["librosa", "numpy", "soundfile", "audioread"]
+# ///
+"""public/assets/hosomiamedance.mp3 から難易度別の譜面 src/charts.json を生成する。
+
+BPM・拍位相・小節線は実測済みの定数。曲が変わらない限り再探索しない。
+生成のあと不変条件を検査し、破れていたら異常終了する。
+
+使い方:
+    uv run scripts/bake-chart.py            生成してから検査
+    uv run scripts/bake-chart.py --verify   既存の JSON を検査するだけ
+"""
+
+import json
+import sys
+from pathlib import Path
+
+SRC = Path("public/assets/hosomiamedance.mp3")
+OUT = Path("src/charts.json")
+
+BPM = 156.0
+SPB = 60.0 / BPM          # 0.384615 = 1拍
+BAR = 4 * SPB             # 1.538462 = 1小節
+BEAT0 = 0.2292            # 1拍目の時刻
+BAR0 = 0.6138             # 1小節目の頭 (= BEAT0 + SPB)
+S16 = SPB / 4             # 0.096154 = 16分
+SONG_END = 137.0
+LAST_BAR = 86             # ここから先(アウトロ)にはノーツを置かない
+
+LANE_L, LANE_D, LANE_U, LANE_R = 0, 1, 2, 3
+
+# 「ひだり みぎ うえ した」の発声時刻。Step 2 で検出した値に置き換えること。
+# JSON 出力時に小数第4位で丸めるので、ここも小数第4位までで書く。
+CALL_TIMES = [92.2413, 93.6112, 94.7606, 95.1670]
+CALL_LANES = [LANE_L, LANE_R, LANE_U, LANE_D]
+
+DIFFS = {
+    # step は 16分いくつおきに置けるか (4=4分, 2=8分, 1=16分)
+    "easy":   {"step": 4, "target": 160, "gap_all": SPB},
+    "normal": {"step": 2, "target": 280, "gap_all": 2 * S16},
+    "hard":   {"step": 1, "target": 460, "gap_all": S16},
+}
+GAP_LANE = 2 * S16        # 同一レーンは全難易度で8分あける
+
+
+# (開始小節, 終了小節(排他), 密度倍率)。設計書「曲の構成」表に対応する。
+SECTIONS = [
+    (0, 10, 0.45),   # イントロ兼サビ1。キックなし、ウォームアップ
+    (10, 17, 1.00),  # ドラムイン
+    (17, 24, 1.30),  # 間奏。歌がないぶん手を動かす
+    (24, 40, 1.15),  # サビ2回目
+    (40, 56, 0.85),  # Aメロ
+    (56, 63, 0.35),  # ブレイク。溜め
+    (63, 79, 1.35),  # ラスサビ
+    (79, 86, 1.00),  # 締め
+]
+
+
+def features():
+    """帯域別のオンセット強度と、中域のスペクトル重心を返す。"""
+    import librosa
+    import numpy as np
+
+    y, sr = librosa.load(str(SRC), sr=22050, mono=True)
+    hop = 256
+    S = np.abs(librosa.stft(y, n_fft=2048, hop_length=hop))
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
+
+    def onset_band(lo, hi):
+        m = (freqs >= lo) & (freqs < hi)
+        e = librosa.onset.onset_strength(
+            S=librosa.amplitude_to_db(S[m], ref=np.max), sr=sr, hop_length=hop
+        )
+        return e / (e.max() + 1e-9)
+
+    band = (freqs >= 300) & (freqs < 3000)
+    Sb = S[band]
+    cent = (Sb * freqs[band][:, None]).sum(axis=0) / (Sb.sum(axis=0) + 1e-9)
+
+    return {
+        "sr": sr,
+        "hop": hop,
+        "kick": onset_band(30, 160),     # キック
+        "body": onset_band(160, 400),    # スネアの胴
+        "mel": onset_band(300, 3000),    # メロディ・ボーカル
+        # 高域。設計書のとおり 4-10kHz。ハイハットの検出と、
+        # スネア判定(胴と高域が同時に立つか)の両方でこの帯域を使う
+        "hat": onset_band(4000, 10000),
+        "cent": cent,
+    }
+
+
+def sample(f, name, t):
+    """時刻 t の値。量子化誤差を吸収するため前後1フレームの最大を取る。"""
+    env = f[name]
+    i = int(round(t * f["sr"] / f["hop"]))
+    i = max(0, min(len(env) - 1, i))
+    lo = max(0, i - 1)
+    hi = min(len(env) - 1, i + 1)
+    return float(max(env[lo], env[i], env[hi]))
+
+
+def classify(f, t):
+    """(種類, 強さ) を返す。種類は kick / snare / hat / mel。"""
+    k = sample(f, "kick", t)
+    b = sample(f, "body", t)
+    m = sample(f, "mel", t)
+    h = sample(f, "hat", t)
+    # スネアは低中域と高域が同時に立つ。片方だけならスネアではない
+    # 重みは実測調整値。デフォルト(1.2, 0.6)だとキック(↓)が easy/normal で
+    # 54%超に偏り Step 7 の検査(1レーン50%超は不可)に落ちたため上げてある。
+    scores = {"kick": k, "snare": min(b, h) * 1.6, "mel": m, "hat": h * 0.85}
+    kind = max(scores, key=lambda x: scores[x])
+    return kind, scores[kind]
+
+
+def bar_to_idx(bar):
+    """小節番号 -> BEAT0 起点の16分インデックス。BAR0 = BEAT0 + SPB なので +4。"""
+    return 4 + 16 * bar
+
+
+def select_times(f, cfg):
+    """区間ごとの割当数に従って、強い16分グリッド点から順に時刻を選ぶ。"""
+    weights = [mult * (b1 - b0) for b0, b1, mult in SECTIONS]
+    total_w = sum(weights)
+
+    chosen = list(CALL_TIMES)  # 固定ギミックを先に確保する
+    chosen_sorted = sorted(chosen)
+
+    def fits(t):
+        # 全体の最小間隔。既に選んだ点との距離を見る
+        for c in chosen_sorted:
+            if abs(c - t) < cfg["gap_all"] - 1e-6:
+                return False
+            if c > t + 1.0:
+                break
+        return True
+
+    for (b0, b1, _mult), w in zip(SECTIONS, weights):
+        quota = int(round(cfg["target"] * w / total_w))
+        # ブレイク区間には固定ギミックの4個が既に入っている
+        quota -= sum(1 for t in CALL_TIMES if b0 <= (t - BAR0) / BAR < b1)
+        if quota <= 0:
+            continue
+
+        i0, i1 = bar_to_idx(b0), bar_to_idx(b1)
+        cands = []
+        for i in range(i0, i1):
+            if i % cfg["step"]:
+                continue
+            # 出力時に小数第4位で丸められるので、選定の時点から丸めた値で
+            # 間隔を判定する。丸め前の値で判定すると、グリッド上でちょうど
+            # 閾値と一致する2点が丸め後にわずかに閾値を割り込むことがある。
+            t = round(BEAT0 + i * S16, 4)
+            if t <= 0 or t >= BAR0 + LAST_BAR * BAR:
+                continue
+            _, strength = classify(f, t)
+            cands.append((strength, t))
+        cands.sort(reverse=True)
+
+        taken = 0
+        for _s, t in cands:
+            if taken >= quota:
+                break
+            if not fits(t):
+                continue
+            chosen.append(t)
+            chosen_sorted = sorted(chosen)
+            taken += 1
+
+    return sorted(chosen)
+
+
+def assign_lanes(f, times):
+    """時間順にレーンを割り当てる。音の種類で固定し、同一レーンの連続と近接を避ける。"""
+    import numpy as np
+
+    out = []
+    last_lane_t = [-9.0, -9.0, -9.0, -9.0]
+    prev_lane = -1
+    run = 0
+    prev_cent = None
+
+    for t in times:
+        forced = next((lane for c, lane in zip(CALL_TIMES, CALL_LANES) if abs(c - t) < 1e-6), None)
+        if forced is not None:
+            lane = forced
+        else:
+            kind, _ = classify(f, t)
+            if kind == "kick":
+                lane = LANE_D
+            elif kind == "snare":
+                lane = LANE_U
+            elif kind == "hat":
+                lane = LANE_R if prev_lane == LANE_L else LANE_L
+            else:
+                c = sample(f, "cent", t)
+                lane = LANE_R if (prev_cent is not None and c > prev_cent) else LANE_L
+                prev_cent = c
+
+            # 同一レーンが近すぎる、または3連続になるなら最も長く空いているレーンへ
+            too_close = t - last_lane_t[lane] < GAP_LANE - 1e-6
+            too_many = lane == prev_lane and run >= 2
+            if too_close or too_many:
+                lane = int(np.argmin(last_lane_t))
+
+        out.append((round(t, 4), lane))
+        run = run + 1 if lane == prev_lane else 1
+        prev_lane = lane
+        last_lane_t[lane] = t
+
+    return out
+
+
+def bake():
+    f = features()
+    notes = {}
+    for key, cfg in DIFFS.items():
+        times = select_times(f, cfg)
+        notes[key] = assign_lanes(f, times)
+        print(f"  {key}: {len(notes[key])} notes")
+    return {"bpm": BPM, "beat0": BEAT0, "songEnd": SONG_END, "notes": notes}
+
+
+def verify(data: dict) -> list[str]:
+    """譜面の不変条件を検査し、破れた項目を文字列で返す。空なら合格。"""
+    bad: list[str] = []
+    notes = data.get("notes", {})
+
+    if set(notes) != set(DIFFS):
+        bad.append(f"難易度キーが違う: {sorted(notes)}")
+        return bad
+
+    counts = {}
+    for key, cfg in DIFFS.items():
+        ns = notes[key]
+        counts[key] = len(ns)
+
+        target = cfg["target"]
+        if not (target * 0.85 <= len(ns) <= target * 1.15):
+            bad.append(f"{key}: ノーツ数 {len(ns)} が目標 {target} の±15%を外れている")
+
+        last_lane = [-9.0] * 4
+        prev_t = -9.0
+        for t, lane in ns:
+            if not (0 <= lane <= 3):
+                bad.append(f"{key}: レーンが範囲外 {lane} at {t}")
+                break
+            if not (0.0 < t < SONG_END):
+                bad.append(f"{key}: 時刻が範囲外 {t}")
+                break
+            if t >= BAR0 + LAST_BAR * BAR:
+                bad.append(f"{key}: アウトロにノーツがある {t}")
+                break
+            if t < prev_t:
+                bad.append(f"{key}: 時刻が昇順でない {prev_t} -> {t}")
+                break
+            if t - prev_t < cfg["gap_all"] - 1e-6 and prev_t > 0:
+                bad.append(f"{key}: 全体の最小間隔違反 {prev_t} -> {t}")
+                break
+            if t - last_lane[lane] < GAP_LANE - 1e-6:
+                bad.append(f"{key}: 同一レーン({lane})の最小間隔違反 {last_lane[lane]} -> {t}")
+                break
+            # 固定ギミック以外は16分グリッドに乗っていること
+            # (丸め誤差があるので 0.5ms の許容で照合する)
+            if not any(abs(t - c) < 5e-4 for c in CALL_TIMES):
+                off = abs(((t - BEAT0) / S16) - round((t - BEAT0) / S16)) * S16
+                if off > 0.001:
+                    bad.append(f"{key}: 16分グリッドから {off*1000:.1f}ms ずれている at {t}")
+                    break
+            last_lane[lane] = t
+            prev_t = t
+
+        # 固定ギミックが歌詞どおりの順で入っていること
+        call = [(t, lane) for t, lane in ns if any(abs(t - c) < 5e-4 for c in CALL_TIMES)]
+        if [lane for _, lane in call] != CALL_LANES:
+            bad.append(f"{key}: 「ひだり みぎ うえ した」のギミックが不正 {call}")
+
+    if not (counts.get("easy", 0) < counts.get("normal", 0) < counts.get("hard", 0)):
+        bad.append(f"難易度の順にノーツ数が増えていない: {counts}")
+
+    return bad
+
+
+def main() -> int:
+    if "--verify" in sys.argv:
+        if not OUT.exists():
+            print(f"NG: {OUT} が無い", file=sys.stderr)
+            return 1
+        data = json.loads(OUT.read_text(encoding="utf-8"))
+    else:
+        data = bake()
+        OUT.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+        print(f"wrote {OUT}")
+
+    bad = verify(data)
+    for b in bad:
+        print(f"NG: {b}", file=sys.stderr)
+    if bad:
+        return 1
+    for key in DIFFS:
+        ns = data["notes"][key]
+        dist = [sum(1 for _t, lane in ns if lane == i) for i in range(4)]
+        print(f"OK {key}: {len(ns)} notes  lanes(←↓↑→)={dist}  first={ns[0]}  last={ns[-1]}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
