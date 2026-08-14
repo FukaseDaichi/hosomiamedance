@@ -44,6 +44,12 @@ DIFFS = {
 }
 GAP_LANE = 2 * S16        # 同一レーンは全難易度で8分あける
 
+# オンセット整合検査の閾値。classify の強さがこれ未満のノーツは「音が無い所を
+# 叩かせている」とみなす。採点に使う classify はノーツ選定と同じ関数なので、
+# この検査は自己参照(theory.md 原則1)。CONT_BONUS の暴走を止める安全網
+ONSET_MIN = 0.10
+ONSET_RATE_MIN = 0.90
+
 # レーン分布の許容範囲(%)。どのレーンも死なせず、どれか1つに寄せすぎない
 LANE_MIN_PCT = 12.0
 LANE_MAX_PCT = 50.0
@@ -232,7 +238,7 @@ def bake():
         times = select_times(f, cfg)
         notes[key] = assign_lanes(f, times)
         print(f"  {key}: {len(notes[key])} notes")
-    return {"bpm": BPM, "beat0": BEAT0, "songEnd": SONG_END, "notes": notes}
+    return {"bpm": BPM, "beat0": BEAT0, "songEnd": SONG_END, "notes": notes}, f
 
 
 def verify(data: dict) -> list[str]:
@@ -304,24 +310,69 @@ def verify(data: dict) -> list[str]:
         if [lane for _, lane in call] != CALL_LANES:
             bad.append(f"{key}: 「ひだり みぎ うえ した」のギミックが不正 {call}")
 
+        # 安全網「密度カーブ」: セクション別ノーツ数が SECTIONS の意図した配分から
+        # 大きく外れていないこと。select_times の quota と同じ式で期待値を出し、
+        # ±30% か 3個の大きい方まで許容する。期待値の出どころが SECTIONS 自身なので
+        # 「意図が曲に合っているか」は測れない(theory.md 原則2)
+        weights = [mult * (b1 - b0) for b0, b1, mult in SECTIONS]
+        total_w = sum(weights)
+        for (b0, b1, _mult), w in zip(SECTIONS, weights):
+            t0, t1 = BAR0 + b0 * BAR, BAR0 + b1 * BAR
+            n = sum(1 for t, _lane in ns if t0 <= t < t1)
+            expected = len(ns) * w / total_w
+            if abs(n - expected) > max(0.30 * expected, 3):
+                bad.append(
+                    f"{key}: 小節{b0}-{b1} の密度 {n} が期待 {expected:.1f} から外れている"
+                )
+
     if not (counts.get("easy", 0) < counts.get("normal", 0) < counts.get("hard", 0)):
         bad.append(f"難易度の順にノーツ数が増えていない: {counts}")
 
+    # 安全網「強拍優先」: 拍頭に乗るノーツの比率が難易度順に単調非増加であること
+    # (低難易度ほど拍頭に置く)。固定ギミックはグリッド外なので除外する。
+    # easy は step=4 で構造的にほぼ100%なので、実質 normal と hard の歯止め
+    def beat_rate(ns):
+        core = [t for t, _lane in ns if not any(abs(t - c) < 5e-4 for c in CALL_TIMES)]
+        on = sum(1 for t in core if round((t - BEAT0) / S16) % 4 == 0)
+        return on / max(1, len(core))
+
+    rates = {key: beat_rate(notes[key]) for key in DIFFS if key in notes}
+    if len(rates) == len(DIFFS) and not (
+        rates["easy"] + 1e-9 >= rates["normal"] and rates["normal"] + 1e-9 >= rates["hard"]
+    ):
+        shown = {k: round(v, 3) for k, v in rates.items()}
+        bad.append(f"拍頭率が難易度順に下がっていない: {shown}")
+
+    return bad
+
+
+def verify_audio(data: dict, f) -> list[str]:
+    """音源解析が要る安全網。bake 時のみ実行する(--verify では走らない)。"""
+    bad: list[str] = []
+    for key, ns in data["notes"].items():
+        core = [t for t, _lane in ns if not any(abs(t - c) < 5e-4 for c in CALL_TIMES)]
+        ok = sum(1 for t in core if classify(f, t)[1] >= ONSET_MIN)
+        rate = ok / max(1, len(core))
+        if rate < ONSET_RATE_MIN:
+            bad.append(f"{key}: オンセット整合率 {rate:.3f} が {ONSET_RATE_MIN} を下回る")
     return bad
 
 
 def main() -> int:
     baked = False
+    f = None
     if "--verify" in sys.argv:
         if not OUT.exists():
             print(f"NG: {OUT} が無い", file=sys.stderr)
             return 1
         data = json.loads(OUT.read_text(encoding="utf-8"))
     else:
-        data = bake()
+        data, f = bake()
         baked = True
 
     bad = verify(data)
+    if f is not None:
+        bad += verify_audio(data, f)
     for b in bad:
         print(f"NG: {b}", file=sys.stderr)
     if bad:
