@@ -44,6 +44,11 @@ DIFFS = {
 }
 GAP_LANE = 2 * S16        # 同一レーンは全難易度で8分あける
 
+# 連続性ボーナス。隣のグリッド点(その難易度のステップ幅で1つ隣)が選択済みなら
+# 強度に加点し、点在よりも連続した流れ(ストリーム)を作る(theory.md 原則3)。
+# 上げすぎると弱い音まで拾って音付け(原則1)を壊す。オンセット整合検査が上限の見張り
+CONT_BONUS = 0.25
+
 # オンセット整合検査の閾値。classify の強さがこれ未満のノーツは「音が無い所を
 # 叩かせている」とみなす。採点に使う classify はノーツ選定と同じ関数なので、
 # この検査は自己参照(theory.md 原則1)。CONT_BONUS の暴走を止める安全網
@@ -134,7 +139,7 @@ def bar_to_idx(bar):
 
 
 def select_times(f, cfg):
-    """区間ごとの割当数に従って、強い16分グリッド点から順に時刻を選ぶ。"""
+    """区間ごとの割当数に従い、強い16分グリッド点を連続性の加点つきで選ぶ。"""
     weights = [mult * (b1 - b0) for b0, b1, mult in SECTIONS]
     total_w = sum(weights)
 
@@ -161,27 +166,40 @@ def select_times(f, cfg):
         if quota <= 0:
             continue
 
-        i0, i1 = bar_to_idx(b0), bar_to_idx(b1)
-        cands = []
-        for i in range(i0, i1):
+        # 区間内の候補グリッド点と強度。丸めの扱いは既存どおり
+        # (出力時に小数第4位で丸めるので、選定も丸めた値で行う)
+        strength = {}
+        for i in range(bar_to_idx(b0), bar_to_idx(b1)):
             if i % cfg["step"]:
                 continue
-            # 出力時に小数第4位で丸められるので、選定の時点から丸めた値で
-            # 間隔を判定する。丸め前の値で判定すると、グリッド上でちょうど
-            # 閾値と一致する2点が丸め後にわずかに閾値を割り込むことがある。
             t = round(BEAT0 + i * S16, 4)
             if t <= 0 or t >= BAR0 + LAST_BAR * BAR:
                 continue
-            _, strength = classify(f, t)
-            cands.append((strength, t))
-        cands.sort(reverse=True)
+            _, s = classify(f, t)
+            strength[i] = (s, t)
 
+        # 逐次貪欲: 選択済みの隣にいる候補に CONT_BONUS を加点しながら、
+        # 最高スコアの点から取っていく。強い音を核にストリームが育つ
+        taken_idx: set[int] = set()
+        dropped: set[int] = set()  # fits に落ちた点。加点の核にはしない
         taken = 0
-        for _s, t in cands:
-            if taken >= quota:
+        while taken < quota:
+            best_i, best_score = None, -1.0
+            for i, (s, _t) in strength.items():
+                if i in taken_idx or i in dropped:
+                    continue
+                bonus = CONT_BONUS * (
+                    (i - cfg["step"] in taken_idx) + (i + cfg["step"] in taken_idx)
+                )
+                if s + bonus > best_score:
+                    best_i, best_score = i, s + bonus
+            if best_i is None:
                 break
+            _s, t = strength[best_i]
             if not fits(t):
+                dropped.add(best_i)
                 continue
+            taken_idx.add(best_i)
             chosen.append(t)
             chosen_sorted = sorted(chosen)
             taken += 1
