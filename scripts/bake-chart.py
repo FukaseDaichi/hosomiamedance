@@ -208,14 +208,13 @@ def select_times(f, cfg):
 
 
 def assign_lanes(f, times):
-    """時間順にレーンを割り当てる。音の種類で固定し、同一レーンの連続と近接を避ける。"""
-    import numpy as np
-
+    """時間順にレーンを割り当てる。手の動き(交互・階段)を最優先し、音の種類は加点で反映する。"""
     out = []
     last_lane_t = [-9.0, -9.0, -9.0, -9.0]
     prev_lane = -1
-    run = 0
-    prev_cent = None
+    prev_prev = -1
+    trill = 0      # 同じ2レーンの往復(A-B-A...)が何個続いたか
+    prev_t = -9.0
 
     for t in times:
         forced = next((lane for c, lane in zip(CALL_TIMES, CALL_LANES) if abs(c - t) < 1e-6), None)
@@ -223,28 +222,38 @@ def assign_lanes(f, times):
             lane = forced
         else:
             kind, _ = classify(f, t)
-            if kind == "kick":
-                lane = LANE_D
-            elif kind == "snare":
-                lane = LANE_U
-            elif kind == "hat":
-                lane = LANE_R if prev_lane == LANE_L else LANE_L
-            else:
-                c = sample(f, "cent", t)
-                lane = LANE_R if (prev_cent is not None and c > prev_cent) else LANE_L
-                prev_cent = c
+            fav = {"kick": LANE_D, "snare": LANE_U}.get(kind)
+            gap = t - prev_t
+            best_lane, best_score = None, None
+            for cand in range(4):
+                # 同一レーンの最小間隔は絶対条件
+                if t - last_lane_t[cand] < GAP_LANE - 1e-6:
+                    continue
+                score = 0.0
+                if cand == prev_lane:
+                    score -= 3.0   # 縦連は強く避ける(theory.md 原則5)
+                if prev_lane >= 0 and gap < 2 * S16 + 1e-6:
+                    if abs(cand - prev_lane) == 1:
+                        score += 1.5   # 速い流れでは隣のレーンへ = 階段(原則4)
+                elif cand != prev_lane:
+                    score += 0.5   # 遅い流れでも交互を好む(原則4)
+                if cand == prev_prev and trill >= 3:
+                    score -= 1.0   # 同じ往復を長く続けない(原則6)
+                if fav is not None and cand == fav:
+                    score += 0.8   # 音の種類は加点どまり(キック=↓、スネア=↑)
+                score += 0.05 * min(t - last_lane_t[cand], 4.0)  # 4レーンをまんべんなく
+                if best_score is None or score > best_score:
+                    best_lane, best_score = cand, score
+            # 全候補が間隔制約で塞がることは通常ない(GAP_LANE 窓内のノーツは最大2個)が、
+            # 万一のときは最も長く空いているレーンへ
+            lane = best_lane if best_lane is not None else max(range(4), key=lambda x: t - last_lane_t[x])
 
-            # 同一レーンが近すぎる、または3連続になるなら最も長く空いているレーンへ
-            # (丸め誤差の許容は fits() と同じ理由で 1e-3)
-            too_close = t - last_lane_t[lane] < GAP_LANE - 1e-3
-            too_many = lane == prev_lane and run >= 2
-            if too_close or too_many:
-                lane = int(np.argmin(last_lane_t))
-
-        out.append((round(t, 4), lane))
-        run = run + 1 if lane == prev_lane else 1
+        trill = trill + 1 if lane == prev_prev else 0
+        prev_prev = prev_lane
         prev_lane = lane
+        prev_t = t
         last_lane_t[lane] = t
+        out.append((round(t, 4), lane))
 
     return out
 
