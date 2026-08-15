@@ -147,7 +147,18 @@ a:hover {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* justify-content: center だと、中身が高さに入り切らないとき上下に均等に
+     あふれ、見出し・フッターごと .stage の overflow: hidden の外に消えてしまう
+     (song-list が flex-wrap で複数行になる狭い画面で発生)。
+     auto マージンでの中央寄せに替えると、入り切る間は今までどおり中央寄せのまま、
+     入り切らない分だけ上詰め+縦スクロールで読めるようになる */
+  overflow-y: auto;
+}
+.screen--center > *:first-child {
+  margin-top: auto;
+}
+.screen--center > *:last-child {
+  margin-bottom: auto;
 }
 
 /* ---- 共通ボタン ---- */
