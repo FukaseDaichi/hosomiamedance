@@ -26,7 +26,9 @@ function lyricStyle(songId: string, idx: number): CSSProperties {
     // レーン(右440px) + 左余白34px を除いた幅の中に置く
     left: `calc(34px + (100% - 474px) * ${lx.toFixed(3)})`,
     maxWidth: `calc((100% - 474px) * ${(1 - lx).toFixed(3)})`,
-    bottom: `${(6 + r(8) * 56).toFixed(1)}%`,
+    // 連続する行が同じ高さに来ないよう、偶数行/奇数行で帯を分ける。
+    // 帯の間に 8% の間隔を空けるので、クロスフェード中も上下が重ならない
+    bottom: `${(6 + (idx % 2) * 32 + r(8) * 24).toFixed(1)}%`,
     fontSize: `${Math.round(28 + r(16) * 24)}px`,
     ['--rot' as string]: `${((r(24) - 0.5) * 14).toFixed(1)}deg`,
   }
