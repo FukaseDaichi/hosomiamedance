@@ -23,6 +23,10 @@ export interface Song {
   /** mp3 の URL。public/ 配下なので BASE_URL を前置する */
   url: string
   bpm: number
+  /** 1拍目の時刻(秒)。録音モードの拍線描画に使う */
+  beat0: number
+  /** 1小節目の頭(秒) */
+  bar0: number
   /** 曲の終わり(秒)。アウトロのフェードを聴かせてから結果画面に行く */
   songEnd: number
   lyrics: LyricLine[]
@@ -51,6 +55,8 @@ export const SONGS: Song[] = META.map((m) => ({
   desc: m.desc,
   url: `${import.meta.env.BASE_URL}assets/${m.file}`,
   bpm: chartData.songs[m.id].bpm,
+  beat0: chartData.songs[m.id].beat0,
+  bar0: chartData.songs[m.id].bar0,
   songEnd: chartData.songs[m.id].songEnd,
   lyrics: m.lyrics,
 }))
