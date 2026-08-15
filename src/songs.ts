@@ -4,9 +4,9 @@
 // 強く依存するので、値の出どころを二重に持たない。
 
 import chartData from './charts.json'
-import { AMAGOI_LYRICS, AMEDANCE_LYRICS, type LyricLine } from './lyrics'
+import { AMAGOI_LYRICS, AMEDANCE_LYRICS, KAMINARI_LYRICS, type LyricLine } from './lyrics'
 
-export type SongId = 'amedance' | 'amagoi'
+export type SongId = 'amedance' | 'amagoi' | 'kaminari'
 export type DifficultyId = 'easy' | 'normal' | 'hard'
 
 export interface ChartNote {
@@ -46,6 +46,13 @@ const META: { id: SongId; title: string; desc: string; file: string; lyrics: Lyr
     desc: 'やんでいく あめに おねがい',
     file: 'hosomiamagoidance.mp3',
     lyrics: AMAGOI_LYRICS,
+  },
+  {
+    id: 'kaminari',
+    title: 'ホソミカミナリダンス',
+    desc: 'ごろごろ なっても おどっちゃう',
+    file: 'hosomikaminaridance.mp3',
+    lyrics: KAMINARI_LYRICS,
   },
 ]
 
