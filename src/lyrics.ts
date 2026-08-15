@@ -15,6 +15,33 @@ export interface LyricLine {
   text: string
 }
 
+/** 歌詞行の表示セグメント。kw=true はカタカナ語(強調対象) */
+export interface LyricSegment {
+  text: string
+  kw: boolean
+}
+
+// カタカナ連続(長音・中点含む)。強調とビート揺れの単位になる
+const KATAKANA_RUN = /[ァ-ヶー・]+/g
+
+/**
+ * 行テキストをセグメントに分割する。
+ * カタカナ語はまとまりで 1 セグメント、それ以外は 1 文字ずつにして
+ * 文字ごとに揺れの位相をずらせるようにする。
+ */
+export function splitLyricSegments(text: string): LyricSegment[] {
+  const out: LyricSegment[] = []
+  let last = 0
+  for (const m of text.matchAll(KATAKANA_RUN)) {
+    const at = m.index ?? 0 // lib のバージョンにより index が optional
+    for (const ch of text.slice(last, at)) out.push({ text: ch, kw: false })
+    out.push({ text: m[0], kw: true })
+    last = at + m[0].length
+  }
+  for (const ch of text.slice(last)) out.push({ text: ch, kw: false })
+  return out
+}
+
 /** 歌い終わってから余韻で残す秒数。 */
 const TAIL = 0.3
 
