@@ -64,6 +64,8 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
   変え、`scripts/bake-chart.py` の `src` も追従させること。
 - **録音由来(source=recorded)の譜面は bake-chart.py の全曲生成でスキップされる**。
   自動生成に戻すときは曲IDを明示指定する(`uv run scripts/bake-chart.py amagoi`)。
+- **録音モードを触ったら混入チェックを走らせる。** `npm run build && grep -rl '__rec\|RecordMode' dist/`
+  が無ヒットであること。`import.meta.env.DEV ? lazy(...) : null` の形を崩すとチャンクが本番に落ちる。
 
 ## 規約
 
@@ -73,7 +75,7 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
 - コメントは日本語。周囲のコードの密度に合わせる。
 - ゲームロジック（判定・スコア・描画）は挙動が繊細なので、リファクタ時は
   ブラウザで実際に遊んで確認する。型が通るだけでは不十分。
-- 譜面の診断・改善は chart-feel スキル(`.claude/skills/chart-feel/`)を使う。
-  録音(dev限定の「譜面をつくる」)から譜面を作る手順も同スキルにある。
-  安全網は `bake-chart.py` の自動検査(recorded の曲は健全性チェックのみ)、
-  改善の最終判定はプレイ確認。譜面 JSON は必ずどちらかのフローを通して書く
+- 譜面の診断・改善は chart-feel スキル（`.claude/skills/chart-feel/`）を使う。
+  録音(dev限定の「ふめんを つくる」)から譜面を作る手順も同スキルにある。
+  安全網は `bake-chart.py` の自動検査（recorded の曲は健全性チェックのみ）、
+  改善の最終判定はプレイ確認。譜面 JSON は必ずどちらかのフローを通して書く。

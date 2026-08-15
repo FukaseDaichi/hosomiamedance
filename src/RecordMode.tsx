@@ -97,7 +97,7 @@ export default class RecordMode extends Component<Props> {
       // dev サーバーが無い等。コンソールに丸ごと出して救済する
       console.error('録音の保存に失敗しました', err)
       console.log(JSON.stringify(rec))
-      this.props.onExit('ほぞんに しっぱい… コンソールに JSON を出したよ')
+      this.props.onExit('ほぞんに しっぱい… コンソールに JSON をだしたよ')
     }
   }
 
@@ -204,7 +204,7 @@ export default class RecordMode extends Component<Props> {
     const barNow = Math.floor((t - song.bar0) / bar)
     g.fillStyle = 'rgba(255,255,255,0.75)'
     g.font = '13px sans-serif'
-    g.fillText(`小節 ${Math.max(0, barNow)} ・ ${this.taps.length} タップ ・ ${Math.max(0, t).toFixed(1)}s`, 14, 20)
+    g.fillText(`しょうせつ ${Math.max(0, barNow)} ・ ${this.taps.length} タップ ・ ${Math.max(0, t).toFixed(1)}s`, 14, 20)
   }
 
   render() {

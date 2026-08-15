@@ -173,10 +173,10 @@ export default class App extends Component<AppProps, AppState> {
     // AudioContext を作ってよい。ここで失敗しても画面は動かさず、
     // 取り直しとエラー表示は startGame に任せる
     void HAudio.loadSong(SONGS[idx].url).catch(() => {})
-    this.setState({ phase: 'select', songIdx: idx })
+    this.setState({ phase: 'select', songIdx: idx, recNotice: null })
   }
 
-  private backToSongSelect = () => this.setState({ phase: 'song' })
+  private backToSongSelect = () => this.setState({ phase: 'song', recNotice: null })
 
   private backToSelect = () => this.setState({ phase: 'select' })
 
@@ -584,7 +584,7 @@ export default class App extends Component<AppProps, AppState> {
               {import.meta.env.DEV && (
                 <button type="button" className="song-card" onClick={() => void this.startRecord()}>
                   <div className="song-key">キー 0</div>
-                  <div className="song-name">🎙 譜面をつくる</div>
+                  <div className="song-name">🎙 ふめんを つくる</div>
                   <div className="song-desc">じぶんで たたいて ろくおん(dev)</div>
                 </button>
               )}
