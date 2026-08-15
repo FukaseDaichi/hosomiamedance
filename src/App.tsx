@@ -208,6 +208,18 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
   private rafId = 0
   private lastRain: number | null = null
 
+  /**
+   * 判定・スコアの本体。state は表示用の写しで、勘定はこちらでやる。
+   * setState は非同期なので、同じタスクに 2 打が入ると両方が同じ this.state を
+   * 読んでしまい、コンボが 1 つ落ちるうえ combo === nextMilestone が二度成立して
+   * スペシャルが 2 連発する。メインスレッドが詰まるとキー入力はまとめて配送される
+   * ので、実際に踏む。
+   */
+  private stats = { score: 0, combo: 0, maxCombo: 0, perfect: 0, good: 0, miss: 0, nextMilestone: 10 }
+  /** 判定表示とスペシャル帯の再マウント用キー。曲をまたいでも進めっぱなしでよい */
+  private judgeKey = 0
+  private specialKey = 0
+
   componentDidMount() {
     // タイトルの次に選ばれる可能性が最も高い1曲目だけ先読みしておく
     HAudio.prefetchSong(SONGS[0].url)
@@ -406,6 +418,7 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
     this.effects = []
     this.flash = [0, 0, 0, 0]
     HAudio.startSong(song.url)
+    this.stats = { score: 0, combo: 0, maxCombo: 0, perfect: 0, good: 0, miss: 0, nextMilestone: 10 }
     if (this.stage) {
       // リザルトのごほうびダンス(SPECIAL ループ)が残っていると move() を弾くので戻す
       this.stage.idle()
@@ -452,7 +465,7 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
   private finish() {
     HAudio.stop()
     const max = this.chart.length * 100
-    const pct = max ? this.state.score / max : 0
+    const pct = max ? this.stats.score / max : 0
     const r = RANKS.find((x) => pct >= x.min) ?? RANKS[RANKS.length - 1]
     if (r.dance) this.stage?.victoryDance()
     else this.stage?.setDancing(false)
@@ -535,24 +548,31 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
     HAudio.sfx(perfect ? 'perfect' : 'good')
     this.effects.push({ lane, t0: performance.now(), color: perfect ? '#ffd47e' : '#9be8c4' })
 
-    const combo = this.state.combo + 1
+    const g = this.stats
+    const combo = ++g.combo
+    g.score += perfect ? 100 : 60
+    g.maxCombo = Math.max(g.maxCombo, combo)
+    if (perfect) g.perfect++
+    else g.good++
+
     const st: Partial<AppState> = {
-      score: this.state.score + (perfect ? 100 : 60),
+      score: g.score,
       combo,
-      maxCombo: Math.max(this.state.maxCombo, combo),
-      perfect: this.state.perfect + (perfect ? 1 : 0),
-      good: this.state.good + (perfect ? 0 : 1),
+      maxCombo: g.maxCombo,
+      perfect: g.perfect,
+      good: g.good,
       judge: perfect ? { text: 'ぴったり!', color: '#ffd47e' } : { text: 'いいね!', color: '#9be8c4' },
-      judgeKey: this.state.judgeKey + 1,
+      judgeKey: ++this.judgeKey,
     }
 
-    if (combo === this.state.nextMilestone) {
+    if (combo === g.nextMilestone) {
       const tier: SpecialTier = combo >= 50 ? 'C' : combo >= 25 ? 'B' : 'A'
+      g.nextMilestone = combo < 25 ? 25 : combo < 50 ? 50 : combo + 25
       this.stage?.special(tier)
       HAudio.sfx('special')
       st.special = { name: SPECIAL_NAMES[tier] }
-      st.specialKey = this.state.specialKey + 1
-      st.nextMilestone = combo < 25 ? 25 : combo < 50 ? 50 : combo + 25
+      st.specialKey = ++this.specialKey
+      st.nextMilestone = g.nextMilestone
     }
 
     this.setState(st as AppState)
@@ -594,11 +614,15 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
     }
     if (missed) {
       const now = performance.now()
-      const st: Partial<AppState> = { miss: this.state.miss + missed, combo: 0, nextMilestone: 10 }
+      const g = this.stats
+      g.miss += missed
+      g.combo = 0
+      g.nextMilestone = 10
+      const st: Partial<AppState> = { miss: g.miss, combo: 0, nextMilestone: 10 }
       // 連続ミスで判定表示が瞬かないよう間引く
       if (now - this.lastMissPop > 250) {
         st.judge = { text: 'あれれ…', color: '#a9b1dc' }
-        st.judgeKey = this.state.judgeKey + 1
+        st.judgeKey = ++this.judgeKey
         this.lastMissPop = now
       }
       this.setState(st as AppState)
