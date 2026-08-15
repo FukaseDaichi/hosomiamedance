@@ -570,7 +570,9 @@ export default class App extends Component<AppProps, AppState> {
                 </button>
               ))}
             </div>
-            <div className="select-note">カードをクリック か 数字キー(1・2)で けってい</div>
+            <div className="select-note">
+              カードをクリック か 数字キー({SONGS.map((_, i) => i + 1).join('・')})で けってい
+            </div>
           </div>
         )}
 
