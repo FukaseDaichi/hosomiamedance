@@ -10,6 +10,7 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
 | `npm run dev` | 開発サーバー |
 | `npm run build` | `tsc --noEmit` + 本番ビルド。CI と同じ |
 | `npm run preview` | 本番ビルドをローカル配信 |
+| `npm run bake-logo` | `logo-src.png` からロゴ・OGP・ファビコンを再生成 |
 | `npm run bake-sprites` | `hosomi.mp4` からスプライトを再生成 |
 | `npm run bake-chart` | 収録曲の mp3 から譜面 `src/charts.json` を再生成。曲 ID を渡すとその曲だけ |
 
@@ -35,12 +36,17 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
 | `src/styles.css` | 全画面のスタイル |
 | `public/assets/hosomi/` | スプライト 128 枚(WebP)。**生成物なので直接編集しない** |
 | `public/assets/covers/` | 選曲カードのカバー 16:9(WebP)。曲名は絵に焼き込んである。作り方は docs/cover-art-prompts.md |
+| `public/assets/logo.webp` | タイトル・ローディングのロゴ。**生成物なので直接編集しない** |
+| `public/assets/ogp.png` | SNS シェア用の 1200x630。同上 |
+| `public/favicon-*.png` | タブと iOS ホーム画面のアイコン。同上 |
+| `scripts/bake-logo.py` | ロゴ原本 → ロゴ/OGP/ファビコンの変換パイプライン |
 | `scripts/bake-sprites.py` | mp4 → 透過スプライトの変換パイプライン |
 | `scripts/bake-chart.py` | 音源解析 → 譜面の生成パイプライン。曲ごとの実測定数もここ |
 | `scripts/analyze-song.py` | 新曲の BPM・拍位相・曲構成を測る(曲追加時だけ) |
 | `scripts/separate-vocals.py` | 歌声だけを抜いた wav を作る(歌詞の時刻取り用) |
 | `scripts/transcribe-lyrics.py` | Whisper で歌詞の実測タイムスタンプを出す |
 | `hosomi.mp4` | スプライトの原本(グリーンバック動画)。リポジトリにコミット済み |
+| `logo-src.png` | ロゴの原本(透過 PNG)。リポジトリにコミット済み |
 
 ## 踏みやすい落とし穴
 
@@ -52,6 +58,14 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
   WebGL コンテキストと AudioContext が二重に生成されるため。追加しない。
 - `bake-sprites` の入力はリポジトリ直下の `hosomi.mp4`（コミット済み）。通常の開発では
   走らせる必要はない。WebP エンコード(method=6)のため全 128 枚で数分かかる。
+- **画像の原本を `public/` に置かない。** `public/` 配下はビルド後もそのまま配信されるので、
+  1.5MB の PNG がそのまま本番に載る。原本はリポジトリ直下に置き、配信するのは bake した
+  `public/assets/logo.webp` だけにする。
+- **ロゴを描き直したら `bake-logo.py` の `HO_BOX` を取り直す。** ファビコンに使う「ホ」の
+  切り出し範囲を原本の座標で持っているので、字の位置が変わると隣の「ソ」を拾う。
+- ロゴの原本は**透過 PNG でなければならない**。透過を表す市松模様が焼き込まれた版を
+  掴んだら、アルファを推定するより原本を出し直すほうが速い（外周の光彩が背景に溶けていて、
+  どこに境界を引いても拡大時に粗が出る）。
 - 見出しの「いろは餅」フォントは**かなと全角記号しかグリフを持たない**（数字・英字に
   加えて漢字も全部空白で出る）。`unicode-range` をその範囲に絞ってあるので、外れた文字は
   M PLUS Rounded 1c にフォールバックする。数字や漢字が別フォントで出るのは仕様。

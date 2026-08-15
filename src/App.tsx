@@ -11,6 +11,9 @@ const RecordMode = import.meta.env.DEV ? lazy(() => import('./RecordMode')) : nu
 
 type Phase = 'loading' | 'title' | 'song' | 'select' | 'game' | 'result' | 'record'
 
+/** タイトルロゴ。public/ 配下なので BASE_URL を前置する */
+const LOGO_URL = `${import.meta.env.BASE_URL}assets/logo.webp`
+
 /** 曲えらびの入れ替えアニメの尺。リズムゲームなので長いと選曲がもたつく */
 const FLIP_MS = 220
 const FLIP_EASE = 'cubic-bezier(0.22, 0.9, 0.28, 1)'
@@ -696,11 +699,7 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
         {s.phase === 'title' && (
           <div className="screen screen--center title-screen">
             <div className="title-block">
-              <div className="title-text">
-                ホソミ
-                <br />
-                アメダンス
-              </div>
+              <img className="title-logo" src={LOGO_URL} alt="ホソミアメダンス" />
               <div className="title-sub">あめのひは みずたまりで ダンス!</div>
             </div>
             <button type="button" className="btn btn--lg" onClick={this.toSongSelect}>
@@ -857,6 +856,7 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
 
         {s.phase === 'loading' && (
           <div className="screen screen--center loading-screen">
+            <img className="loading-logo" src={LOGO_URL} alt="ホソミアメダンス" />
             <div className="loading-text">じゅんびちゅう…</div>
             <div className="loading-sub">ホソミが かさを さしています</div>
           </div>

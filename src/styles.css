@@ -361,14 +361,13 @@ a:hover {
   text-align: center;
 }
 
-.title-text {
-  font-size: min(10vw, 104px);
-  line-height: 1.05;
-  color: #fff;
-  text-shadow:
-    0 6px 0 #d96a9d,
-    0 12px 34px rgba(255, 140, 190, 0.45);
-  letter-spacing: 0.04em;
+/* ロゴ自体が白フチと影を持っているので text-shadow の代わりは要らない。
+   暗い地から浮かせるぶんだけ drop-shadow を足す */
+.title-logo {
+  display: block;
+  width: min(86vw, 620px);
+  height: auto;
+  filter: drop-shadow(0 10px 26px rgba(255, 140, 190, 0.35));
 }
 
 .title-sub {
@@ -793,6 +792,13 @@ a:hover {
 .loading-screen {
   gap: 16px;
   background: linear-gradient(180deg, #38305e, #4b3a72);
+}
+
+.loading-logo {
+  display: block;
+  width: min(64vw, 400px);
+  height: auto;
+  filter: drop-shadow(0 8px 20px rgba(255, 140, 190, 0.3));
 }
 
 .loading-text {
