@@ -66,7 +66,7 @@
 // recordings/amagoi-20260815-103045.json
 {
   "song": "amagoi",
-  "recordedAt": "2026-08-15T10:30:45+09:00",
+  "recordedAt": "2026-08-15T01:30:45.000Z",  // toISOString() なので UTC
   "bpm": 127.384,        // 再現・検証用に charts.json から転記
   "beat0": 0.294,
   "aborted": false,      // Esc 中断なら true

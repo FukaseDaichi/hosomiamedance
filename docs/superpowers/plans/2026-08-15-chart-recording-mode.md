@@ -65,6 +65,13 @@ def verify_recorded(song: Song, data: dict) -> list[str]:
     if set(notes) != set(DIFF_STEPS):
         return [f"{song.id}: 難易度キーが違う: {sorted(notes)}"]
 
+    # メタは実測定数と一致していること(変換時に書き換えてはいけない)
+    for name, want in [
+        ("bpm", song.bpm), ("beat0", song.beat0), ("bar0", song.bar0), ("songEnd", song.song_end),
+    ]:
+        if data.get(name) != want:
+            bad.append(f"{song.id}: {name} が実測定数と違う: {data.get(name)} != {want}")
+
     counts = {}
     for key in DIFF_STEPS:
         ns = notes[key]
@@ -77,6 +84,9 @@ def verify_recorded(song: Song, data: dict) -> list[str]:
                 break
             if not (0.0 < t < song.song_end):
                 bad.append(f"{song.id}/{key}: 時刻が範囲外 {t}")
+                break
+            if t < song.bar0 - 1e-3:
+                bad.append(f"{song.id}/{key}: 1小節目より前にノーツがある {t}")
                 break
             if t >= song.bar0 + song.last_bar * song.bar:
                 bad.append(f"{song.id}/{key}: アウトロにノーツがある {t}")
@@ -100,6 +110,8 @@ def verify_recorded(song: Song, data: dict) -> list[str]:
             last_lane[lane] = t
             prev_t = t
 
+    if counts["hard"] == 0:
+        bad.append(f"{song.id}: hard が空。録音の変換に失敗している")
     if not (counts["easy"] <= counts["normal"] <= counts["hard"]):
         bad.append(f"{song.id}: 難易度の順にノーツ数が増えていない: {counts}")
     return bad
@@ -110,7 +122,11 @@ def verify_recorded(song: Song, data: dict) -> list[str]:
 ```python
 def verify(song: Song, data: dict) -> list[str]:
     """譜面の不変条件を検査し、破れた項目を文字列で返す。空なら合格。"""
-    if data.get("source") == "recorded":
+    # source の綴りミスは保護(全曲生成のスキップ判定)をすり抜けるので、ここで落とす
+    source = data.get("source", "baked")
+    if source not in ("baked", "recorded"):
+        return [f"{song.id}: source が不正: {source!r}"]
+    if source == "recorded":
         return verify_recorded(song, data)
     bad: list[str] = []
     ...(以下既存のまま)
@@ -248,7 +264,9 @@ function chartRecorder(): Plugin {
               `-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`
             const dir = path.resolve('recordings')
             fs.mkdirSync(dir, { recursive: true })
-            const file = `${song}-${stamp}.json`
+            // 同秒の保存が重なっても上書きしない
+            let file = `${song}-${stamp}.json`
+            for (let i = 2; fs.existsSync(path.join(dir, file)); i++) file = `${song}-${stamp}-${i}.json`
             fs.writeFileSync(path.join(dir, file), JSON.stringify(rec, null, 1) + '\n')
             res.setHeader('content-type', 'application/json')
             res.end(JSON.stringify({ file: `recordings/${file}` }))
@@ -366,14 +384,17 @@ export interface Recording {
 
 /** dev サーバーに録音を保存し、書かれたファイルの相対パスを返す。 */
 export async function saveRecording(rec: Recording): Promise<string> {
-  // dev サーバー直付けの API なので BASE_URL は前置しない
+  // dev サーバー直付けの API なので BASE_URL は前置しない。
+  // 保存に失敗しても録音画面に閉じ込めないよう、待つのは5秒まで
   const res = await fetch('/__rec', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(rec),
+    signal: AbortSignal.timeout(5000),
   })
   if (!res.ok) throw new Error(`録音の保存に失敗しました (status ${res.status})`)
-  const body = (await res.json()) as { file: string }
+  const body = (await res.json()) as { file?: unknown }
+  if (typeof body.file !== 'string') throw new Error('保存先の応答が不正です')
   return body.file
 }
 ```
@@ -403,6 +424,7 @@ git commit -m "feat: 録音モードの土台(拍情報の公開・録音の型�
 **Files:**
 - Create: `src/RecordMode.tsx`
 - Modify: `src/App.tsx`(phase 追加、入口カード、lazy import)
+- Modify: `src/styles.css`(`.song-list` — 4枚目のカードで溢れないよう折り返し可能に)
 
 **Interfaces:**
 - Consumes: `Song`(beat0/bar0 込み)、`RainStage`、`HAudio.time()/startSong()/stop()/sfx()`、`saveRecording()`、`drawArrow()`
@@ -427,8 +449,8 @@ const LANE_KEYS: Record<string, number> = { ArrowLeft: 0, ArrowDown: 1, ArrowUp:
 const LANE_DIRS: Direction[] = ['LEFT', 'DOWN', 'UP', 'RIGHT']
 const LANE_COLORS = ['#ff8fbf', '#ffd06e', '#7fe3b3', '#a99bff']
 const LANE_ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2]
-/** 録音対象は hard 相当なので落下速度も hard に合わせる */
-const NOTE_SPEED = 400
+/** 録音対象は hard 相当なので落下速度も hard に合わせる(値の二重持ちを避ける) */
+const NOTE_SPEED = HAudio.DIFFICULTIES.find((d) => d.id === 'hard')!.noteSpeed
 
 interface Props {
   song: Song
@@ -463,6 +485,8 @@ export default class RecordMode extends Component<Props> {
   }
 
   private onKey = (e: KeyboardEvent) => {
+    // 押しっぱなしの OS キーリピートを録音に混ぜない
+    if (e.repeat) return
     if (e.key === 'Escape') {
       void this.finish(true)
     } else if (e.key in LANE_KEYS) {
@@ -513,6 +537,8 @@ export default class RecordMode extends Component<Props> {
   }
 
   private loop = () => {
+    // 保存待ちの間(finish 後)は描画も終了判定もしない
+    if (this.done) return
     this.rafId = requestAnimationFrame(this.loop)
     const t = HAudio.time()
     if (t > this.props.song.songEnd) {
@@ -721,6 +747,19 @@ select 画面の `select-note` の下に通知表示を追加:
             {s.recNotice && <div className="select-note">{s.recNotice}</div>}
 ```
 
+`src/styles.css` の `.song-list`(394行)を折り返し可能にする(dev の録音カードで
+4枚になると現状の横一列 240px×4 では溢れる):
+
+```css
+.song-list {
+  display: flex;
+  gap: 26px;
+  /* dev 限定の録音カードで4枚になっても溢れないように折り返す */
+  flex-wrap: wrap;
+  justify-content: center;
+}
+```
+
 - [ ] **Step 3: ビルドと本番バンドル混入チェック**
 
 ```bash
@@ -746,7 +785,7 @@ preview_start(launch.json の dev 設定、無ければ作る)で `http://localh
 - [ ] **Step 5: コミット**
 
 ```bash
-git add src/RecordMode.tsx src/App.tsx
+git add src/RecordMode.tsx src/App.tsx src/styles.css
 git commit -m "feat: 譜面録音モードを追加(dev限定)
 
 難易度選択の「譜面をつくる」から、拍線だけのレーンで十字キーを
@@ -793,7 +832,7 @@ dev 限定の録音モード(難易度選択の「🎙 譜面をつくる」)で
    最寄りの16分グリッド(beat0 + k*spb/4)からのずれを出し、その**中央値**を
    全タップから引く
 3. **量子化**: 補正後の各タップを最寄りの16分グリッドに乗せる。丸めは
-   bake-chart.py と同じ精度(ミリ秒3桁)で行う
+   bake-chart.py と同じ精度(秒の小数4桁、`round(t, 4)`)で行う
 4. **掃除**: 同グリッド同レーンの重複は1つに。全体 < 16分、同一レーン < 8分の
    間隔違反は、前後の文脈(ストリームの流れ)を見てどちらかを間引くか隣の
    グリッドに逃がす。曲頭(bar0 より前)とアウトロ(last_bar 以降)のタップは捨てる
