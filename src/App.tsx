@@ -1,9 +1,53 @@
-import { Component, createRef, lazy, Suspense } from 'react'
+import { Component, createRef, lazy, Suspense, type CSSProperties, type ReactNode } from 'react'
 import * as HAudio from './audio'
 import { drawArrow } from './laneDraw'
-import { lineAt } from './lyrics'
+import { lineAt, splitLyricSegments } from './lyrics'
 import { RainStage, type Direction, type SpecialTier } from './rainStage'
 import { SONGS, chart } from './songs'
+
+// ---- 歌詞のキネティック・タイポグラフィ ----
+// 行ごとの位置・角度・サイズを曲IDと行番号から決定的に決める。
+// 乱数を使わないので、同じ曲は毎回同じ演出になる。
+
+function hash32(str: string): number {
+  let h = 2166136261
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+function lyricStyle(songId: string, idx: number): CSSProperties {
+  const h = hash32(`${songId}:${idx}`)
+  const r = (n: number) => ((h >>> n) & 0xff) / 255 // 0..1 を8bitずつ取り出す
+  const lx = r(0) * 0.45 // 横位置。レーンを除いた幅に対する割合
+  return {
+    // レーン(右440px) + 左余白34px を除いた幅の中に置く
+    left: `calc(34px + (100% - 474px) * ${lx.toFixed(3)})`,
+    maxWidth: `calc((100% - 474px) * ${(1 - lx).toFixed(3)})`,
+    bottom: `${(6 + r(8) * 56).toFixed(1)}%`,
+    fontSize: `${Math.round(28 + r(16) * 24)}px`,
+    ['--rot' as string]: `${((r(24) - 0.5) * 14).toFixed(1)}deg`,
+  }
+}
+
+/** 歌詞1行をセグメントの span 列にする。空白は揺らさずそのまま出す */
+function renderLyricLine(text: string): ReactNode[] {
+  return splitLyricSegments(text).map((seg, i) =>
+    seg.text.trim() === '' ? (
+      <span key={i}>{seg.text}</span>
+    ) : (
+      <span
+        key={i}
+        className={seg.kw ? 'lyric-seg lyric-kw' : 'lyric-seg'}
+        style={{ ['--i' as string]: i }}
+      >
+        {seg.text}
+      </span>
+    )
+  )
+}
 
 // 録音モードは dev 限定。本番では import.meta.env.DEV が false 定数になり、
 // この分岐ごと dead code elimination でチャンクが消える
@@ -638,7 +682,7 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
         <div className="vignette" />
 
         {s.phase === 'game' && (
-          <div className="screen">
+          <div className="screen" style={{ ['--beat' as string]: `${(60 / song.bpm).toFixed(4)}s` }}>
             <div className="lane-panel">
               <canvas className="lane-canvas" ref={this.laneCanvasRef} />
             </div>
@@ -671,13 +715,17 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
             )}
 
             {s.lyricOut >= 0 && (
-              <div key={`out-${s.lyricOutKey}`} className="lyric lyric--out">
-                {song.lyrics[s.lyricOut].text}
+              <div
+                key={`out-${s.lyricOutKey}`}
+                className="lyric lyric--out"
+                style={lyricStyle(song.id, s.lyricOut)}
+              >
+                {renderLyricLine(song.lyrics[s.lyricOut].text)}
               </div>
             )}
             {s.lyricIdx >= 0 && (
-              <div key={s.lyricIdx} className="lyric">
-                {song.lyrics[s.lyricIdx].text}
+              <div key={s.lyricIdx} className="lyric" style={lyricStyle(song.id, s.lyricIdx)}>
+                {renderLyricLine(song.lyrics[s.lyricIdx].text)}
               </div>
             )}
 
