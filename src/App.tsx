@@ -1,11 +1,15 @@
-import { Component, createRef } from 'react'
+import { Component, createRef, lazy, Suspense } from 'react'
 import * as HAudio from './audio'
 import { drawArrow } from './laneDraw'
 import { lineAt } from './lyrics'
 import { RainStage, type Direction, type SpecialTier } from './rainStage'
 import { SONGS, chart } from './songs'
 
-type Phase = 'loading' | 'title' | 'song' | 'select' | 'game' | 'result'
+// 録音モードは dev 限定。本番では import.meta.env.DEV が false 定数になり、
+// この分岐ごと dead code elimination でチャンクが消える
+const RecordMode = import.meta.env.DEV ? lazy(() => import('./RecordMode')) : null
+
+type Phase = 'loading' | 'title' | 'song' | 'select' | 'game' | 'result' | 'record'
 
 /** 0 = 未処理, 1 = 叩いた, 2 = 見逃した */
 type NoteState = 0 | 1 | 2
@@ -66,6 +70,8 @@ interface AppState {
   lyricOut: number
   /** フェードアウトのアニメーションを鳴らし直すための再マウント用キー */
   lyricOutKey: number
+  /** 録音モードの保存結果。難易度選択画面に出す */
+  recNotice: string | null
 }
 
 const LANE_KEYS: Record<string, number> = { ArrowLeft: 0, ArrowDown: 1, ArrowUp: 2, ArrowRight: 3 }
@@ -108,6 +114,7 @@ export default class App extends Component<AppProps, AppState> {
     lyricIdx: -1,
     lyricOut: -1,
     lyricOutKey: 0,
+    recNotice: null,
   }
 
   private readonly stageHostRef = createRef<HTMLDivElement>()
@@ -220,6 +227,23 @@ export default class App extends Component<AppProps, AppState> {
     })
   }
 
+  /** 録音モードへ。dev 限定(入口が DEV ガード下にしかない) */
+  private async startRecord() {
+    HAudio.wake()
+    const song = SONGS[this.state.songIdx]
+    if (!HAudio.isSongReady(song.url) || !(this.stage?.isWarm ?? true)) {
+      this.setState({ phase: 'loading' })
+      try {
+        await Promise.all([HAudio.loadSong(song.url), this.stage?.warm])
+      } catch (err) {
+        console.error('録音の準備に失敗しました', err)
+        this.setState({ phase: 'select' })
+        return
+      }
+    }
+    this.setState({ phase: 'record', recNotice: null })
+  }
+
   private finish() {
     HAudio.stop()
     this.stage?.setDancing(false)
@@ -240,6 +264,7 @@ export default class App extends Component<AppProps, AppState> {
     } else if (p === 'select') {
       if (e.key === 'Escape') this.setState({ phase: 'song' })
       else if (['1', '2', '3'].includes(e.key)) void this.startGame(Number(e.key) - 1)
+      else if (import.meta.env.DEV && e.key === '0') void this.startRecord()
     } else if (p === 'game') {
       if (e.key === 'Escape') {
         HAudio.stop()
@@ -485,6 +510,17 @@ export default class App extends Component<AppProps, AppState> {
           </div>
         )}
 
+        {RecordMode && s.phase === 'record' && (
+          <Suspense fallback={null}>
+            <RecordMode
+              song={song}
+              stage={this.stage}
+              noteSpeed={this.props.noteSpeed ?? 1}
+              onExit={(notice) => this.setState({ phase: 'select', recNotice: notice })}
+            />
+          </Suspense>
+        )}
+
         {s.phase === 'title' && (
           <div className="screen screen--center title-screen">
             <div className="title-block">
@@ -545,10 +581,18 @@ export default class App extends Component<AppProps, AppState> {
                   </div>
                 </button>
               ))}
+              {import.meta.env.DEV && (
+                <button type="button" className="song-card" onClick={() => void this.startRecord()}>
+                  <div className="song-key">キー 0</div>
+                  <div className="song-name">🎙 譜面をつくる</div>
+                  <div className="song-desc">じぶんで たたいて ろくおん(dev)</div>
+                </button>
+              )}
             </div>
             <div className="select-note">
               カードをクリック か 数字キー(1・2・3)で けってい ・ Esc で きょくえらび
             </div>
+            {s.recNotice && <div className="select-note">{s.recNotice}</div>}
             <button type="button" className="btn btn--sm btn--ghost" onClick={this.backToSongSelect}>
               きょくを えらびなおす
             </button>

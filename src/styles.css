@@ -394,6 +394,9 @@ a:hover {
 .song-list {
   display: flex;
   gap: 26px;
+  /* dev 限定の録音カードで4枚になっても溢れないように折り返す */
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .song-card {
