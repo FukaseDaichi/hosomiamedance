@@ -38,6 +38,8 @@ interface Engine {
 interface SongState {
   src: AudioBufferSourceNode
   startAt: number
+  /** この曲の再生で使う出力遅延(秒)。曲の途中で変えないよう開始時に固定する */
+  latency: number
 }
 
 let engine: Engine | null = null
@@ -152,6 +154,20 @@ export function isSongReady(url: string): boolean {
   return songBuffer !== null && songBuffer.url === url
 }
 
+/**
+ * 出力遅延(秒)。ctx.currentTime はグラフを描画し終えた位置であって、
+ * スピーカーから出た位置ではない。差はデバイスのバッファぶんで、
+ * 内蔵スピーカーで 30ms 前後、Bluetooth だともっと大きい。
+ * 補正しないと判定の時計が耳より先に進み、全ノーツが一様に「遅い」判定になる。
+ */
+function outputLatency(e: Engine): number {
+  // outputLatency は Safari が未実装。その場合は baseLatency から見積もる
+  // (出力バッファはだいたいレンダリング量子の倍で回る)
+  const raw = e.ctx.outputLatency || e.ctx.baseLatency * 2 || 0.02
+  // デバイスが異常値を返しても譜面ごと吹き飛ばさない
+  return Math.min(Math.max(raw, 0), 0.3)
+}
+
 /** 曲を先頭から再生する。0.9 秒の助走を置いてから鳴り始める。 */
 export function startSong(url: string) {
   const e = ensureEngine()
@@ -163,7 +179,7 @@ export function startSong(url: string) {
   src.connect(e.master)
   const startAt = e.ctx.currentTime + 0.9
   src.start(startAt)
-  songState = { src, startAt }
+  songState = { src, startAt, latency: outputLatency(e) }
 }
 
 export function stop() {
@@ -179,10 +195,14 @@ export function stop() {
   }
 }
 
-/** 曲頭を 0 とした現在位置(秒)。未再生なら -99。 */
+/**
+ * 曲頭を 0 とした現在位置(秒)。未再生なら -99。
+ * 「いま耳に届いている位置」を返す(出力遅延を引いてある)。判定・描画・歌詞は
+ * すべてこの時計に乗るので、譜面は音と同じタイミングで判定される。
+ */
 export function time(): number {
   if (!songState || !engine) return -99
-  return engine.ctx.currentTime - songState.startAt
+  return engine.ctx.currentTime - songState.startAt - songState.latency
 }
 
 export function sfx(name: SfxName) {
