@@ -1,9 +1,66 @@
-import { Component, createRef, lazy, Suspense } from 'react'
+import { Component, createRef, lazy, Suspense, type CSSProperties, type ReactNode } from 'react'
 import * as HAudio from './audio'
 import { drawArrow } from './laneDraw'
-import { lineAt } from './lyrics'
+import { lineAt, splitLyricSegments } from './lyrics'
 import { RainStage, type Direction, type SpecialTier } from './rainStage'
 import { SONGS, chart } from './songs'
+
+// ---- 歌詞のキネティック・タイポグラフィ ----
+// 行ごとの位置・角度・サイズを曲IDと行番号から決定的に決める。
+// 乱数を使わないので、同じ曲は毎回同じ演出になる。
+
+function hash32(str: string): number {
+  let h = 2166136261
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  // FNV-1a は末尾1文字の違いが上位バイトにほとんど伝わらない。
+  // murmur3 の最終撹拌を通して、隣り合う行でも全バイトが散るようにする
+  h ^= h >>> 16
+  h = Math.imul(h, 2246822507)
+  h ^= h >>> 13
+  h = Math.imul(h, 3266489909)
+  h ^= h >>> 16
+  return h >>> 0
+}
+
+function lyricStyle(songId: string, idx: number): CSSProperties {
+  const h = hash32(`${songId}:${idx}`)
+  const r = (n: number) => ((h >>> n) & 0xff) / 255 // 0..1 を8bitずつ取り出す
+  const lx = r(0) * 0.45 // 横位置。レーンを除いた幅に対する割合
+  return {
+    // ノーツレーンは実質 右370px(right30px+width340px)。ここでは安全側に
+    // 右440px+左余白34px=474pxを除いており、レーンより約70px広く避けている
+    left: `calc(34px + (100% - 474px) * ${lx.toFixed(3)})`,
+    maxWidth: `calc((100% - 474px) * ${(1 - lx).toFixed(3)})`,
+    // 連続する行が同じ帯に来ないよう、偶数行/奇数行で帯を分ける。単一行なら
+    // 帯間の8%ギャップで重ならないが、2行に折り返す行は帯を超えることがあり
+    // (実測: amedanceのidx19→20で約32px重なる)、その残留衝突は許容している。
+    // 下限10%は狭い画面(高さ~600px)で.hintと重ならないための底上げ。2行に
+    // 折り返す高さ~180pxの行は、高さ800px未満の画面で.hudに軽く重なりうる。
+    bottom: `${(10 + (idx % 2) * 28 + r(8) * 20).toFixed(1)}%`,
+    fontSize: `${Math.round(28 + r(16) * 24)}px`,
+    ['--rot' as string]: `${((r(24) - 0.5) * 14).toFixed(1)}deg`,
+  }
+}
+
+/** 歌詞1行をセグメントの span 列にする。空白は揺らさずそのまま出す */
+function renderLyricLine(text: string): ReactNode[] {
+  return splitLyricSegments(text).map((seg, i) =>
+    seg.text.trim() === '' ? (
+      <span key={i}>{seg.text}</span>
+    ) : (
+      <span
+        key={i}
+        className={seg.kw ? 'lyric-seg lyric-kw' : 'lyric-seg'}
+        style={{ ['--i' as string]: i }}
+      >
+        {seg.text}
+      </span>
+    )
+  )
+}
 
 // 録音モードは dev 限定。本番では import.meta.env.DEV が false 定数になり、
 // この分岐ごと dead code elimination でチャンクが消える
@@ -638,7 +695,7 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
         <div className="vignette" />
 
         {s.phase === 'game' && (
-          <div className="screen">
+          <div className="screen" style={{ ['--beat' as string]: `${(60 / song.bpm).toFixed(4)}s` }}>
             <div className="lane-panel">
               <canvas className="lane-canvas" ref={this.laneCanvasRef} />
             </div>
@@ -658,26 +715,33 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
               </div>
             )}
 
+            {/* judge/special と key の数値空間が重なると React が "duplicate key" を
+                警告してしまう(judgeKey・lyricIdx はどちらも 0 から増える別カウンタ)ので
+                用途ごとに接頭辞を付けて名前空間を分ける */}
             {s.judge && (
-              <div key={s.judgeKey} className="judge" style={{ color: s.judge.color }}>
+              <div key={`judge-${s.judgeKey}`} className="judge" style={{ color: s.judge.color }}>
                 {s.judge.text}
               </div>
             )}
 
             {s.special && (
-              <div key={s.specialKey} className="special-banner">
+              <div key={`special-${s.specialKey}`} className="special-banner">
                 スペシャル♥ {s.special.name}
               </div>
             )}
 
             {s.lyricOut >= 0 && (
-              <div key={`out-${s.lyricOutKey}`} className="lyric lyric--out">
-                {song.lyrics[s.lyricOut].text}
+              <div
+                key={`out-${s.lyricOutKey}`}
+                className="lyric lyric--out"
+                style={lyricStyle(song.id, s.lyricOut)}
+              >
+                {renderLyricLine(song.lyrics[s.lyricOut].text)}
               </div>
             )}
             {s.lyricIdx >= 0 && (
-              <div key={s.lyricIdx} className="lyric">
-                {song.lyrics[s.lyricIdx].text}
+              <div key={`lyric-${s.lyricIdx}`} className="lyric" style={lyricStyle(song.id, s.lyricIdx)}>
+                {renderLyricLine(song.lyrics[s.lyricIdx].text)}
               </div>
             )}
 
