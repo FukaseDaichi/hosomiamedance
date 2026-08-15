@@ -7,6 +7,8 @@ export type SpecialTier = 'A' | 'B' | 'C'
 
 const FRAMES = 16
 const SPRITE_ASPECT = 270 / 480
+/** 1 フレームに GPU へ上げるテクスチャの枚数 */
+const WARM_PER_FRAME = 4
 
 function radialTex(inner: string, outer: string, size = 128): THREE.CanvasTexture {
   const c = document.createElement('canvas')
@@ -99,6 +101,8 @@ interface Bokeh {
 export class RainStage {
   /** IDLE のテクスチャが揃ったら解決する。タイトル表示の待ち合わせに使う。 */
   readonly ready: Promise<void>
+  /** 全アニメが揃い GPU にも載ったら解決する。ゲーム開始の待ち合わせに使う。 */
+  readonly warm: Promise<void>
 
   private readonly container: HTMLElement
   private readonly renderer: THREE.WebGLRenderer
@@ -122,6 +126,12 @@ export class RainStage {
 
   private readonly textures: Partial<Record<AnimName, THREE.Texture[]>> = {}
   private anim: AnimState = { name: 'IDLE', fps: 13, loop: true, frame: 0, acc: 0 }
+
+  /** GPU へ上げ終えていないテクスチャ。pumpWarm が少しずつ捌く */
+  private warmQueue: THREE.Texture[] = []
+  private warmResolve: (() => void) | null = null
+  private warmPumping = false
+  private warmed = false
 
   private bpm = 0
   private dancing = false
@@ -277,8 +287,13 @@ export class RainStage {
     mirror.renderOrder = 3
     this.charGroup.add(mirror)
 
-    this.ready = this.loadTextures()
+    document.addEventListener('visibilitychange', this.onVisibility)
+    this.ready = this.loadAnim('IDLE')
     void this.ready.then(() => this.applyFrame())
+    this.warm = this.loadRest()
+    // ゲームを始めないまま失敗した場合に unhandled rejection にしない。
+    // ここで握っても startGame 側の await は従来どおり reject される
+    void this.warm.catch(() => {})
 
     this.resizeObserver = new ResizeObserver(() => this.resize())
     this.resizeObserver.observe(container)
@@ -293,6 +308,11 @@ export class RainStage {
     this.resizeObserver.disconnect()
     this.renderer.domElement.remove()
     this.renderer.dispose()
+    document.removeEventListener('visibilitychange', this.onVisibility)
+    // renderer を捨てた以上キューはもう捌けない。待っている側を置き去りにしない
+    this.warmQueue = []
+    this.warmResolve?.()
+    this.warmResolve = null
   }
 
   private loadTexture(url: string): Promise<THREE.Texture> {
@@ -316,12 +336,65 @@ export class RainStage {
       ),
     )
     this.textures[a] = frames
+    this.warmQueue.push(...frames)
+    this.schedulePump()
   }
 
-  private async loadTextures() {
-    // タイトルは IDLE だけで始められるので、残りは裏で読み込む
-    await this.loadAnim('IDLE')
-    void Promise.all(ANIMS.filter((a) => a !== 'IDLE').map((a) => this.loadAnim(a)))
+  /**
+   * 読み終わったテクスチャを GPU に上げる。表示中は 1 フレームぶんずつ刻む。
+   * 128 枚まとめて上げるとそこで一度大きく止まるため。
+   * 隠れている間は描画していないので刻む理由がなく、その場で全部上げる。
+   * タブが隠れると rAF は止まり、setTimeout も 1 秒に絞られるので、
+   * 刻んだままだとキューが捌けず warm が解決しなくなる
+   */
+  private pumpWarm = () => {
+    this.warmPumping = false
+    if (this.disposed) return
+    const n = document.hidden ? this.warmQueue.length : WARM_PER_FRAME
+    for (let i = 0; i < n && this.warmQueue.length; i++) {
+      this.renderer.initTexture(this.warmQueue.shift()!)
+    }
+    if (this.warmQueue.length) {
+      this.schedulePump()
+      return
+    }
+    const done = this.warmResolve
+    this.warmResolve = null
+    done?.()
+  }
+
+  private schedulePump() {
+    if (this.warmPumping || this.disposed || !this.warmQueue.length) return
+    if (document.hidden) {
+      this.pumpWarm()
+      return
+    }
+    this.warmPumping = true
+    requestAnimationFrame(this.pumpWarm)
+  }
+
+  /** 表示中に隠れると rAF ごと止まる。取り残したぶんをその場で上げ切る */
+  private onVisibility = () => {
+    if (document.hidden) this.pumpWarm()
+    else this.schedulePump()
+  }
+
+  /**
+   * タイトルに要らない 7 アニメを読み、全 128 枚を GPU に載せ終えるまで待つ。
+   * 読んだだけでは GPU にはまだ無く、そのコマが初めて画面に出るときに
+   * アップロードが走ってフレームが飛ぶ。ゲーム中にそれを起こさないため、
+   * ここが解決するまで startGame は待つ。
+   */
+  private async loadRest(): Promise<void> {
+    await this.ready
+    await Promise.all(ANIMS.filter((a) => a !== 'IDLE').map((a) => this.loadAnim(a)))
+    if (this.warmQueue.length) await new Promise<void>((res) => (this.warmResolve = res))
+    this.warmed = true
+  }
+
+  /** 全アニメが GPU に載り終えているか。開始をゲートするので同期で見たい */
+  get isWarm(): boolean {
+    return this.warmed
   }
 
   private applyFrame() {

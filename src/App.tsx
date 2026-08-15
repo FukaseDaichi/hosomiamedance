@@ -210,8 +210,10 @@ export default class App extends Component<AppProps, AppState> {
 
   private pickSong = (idx: number) => {
     HAudio.sfx('select')
-    // 難易度を選んでいる間に取得を走らせておく
-    HAudio.prefetchSong(SONGS[idx].url)
+    // 難易度を選んでいる間にデコードまで済ませておく。押されたあとなので
+    // AudioContext を作ってよい。ここで失敗しても画面は動かさず、
+    // 取り直しとエラー表示は startGame に任せる
+    void HAudio.loadSong(SONGS[idx].url).catch(() => {})
     this.setState({ phase: 'select', songIdx: idx })
   }
 
@@ -224,13 +226,16 @@ export default class App extends Component<AppProps, AppState> {
   private async startGame(diffIdx: number) {
     HAudio.wake()
     const song = SONGS[this.state.songIdx]
-    if (!HAudio.isSongReady(song.url)) {
+    // 曲のデコードとスプライトの GPU アップロードが済むまで始めない。
+    // 未完のまま始めると、初出コマのアップロードでフレームが飛んでノーツが
+    // 音とズレて見え、まだ読めていないコンボ演出は play() に捨てられる
+    if (!HAudio.isSongReady(song.url) || !(this.stage?.isWarm ?? true)) {
       this.setState({ phase: 'loading' })
       try {
-        await HAudio.loadSong(song.url)
+        await Promise.all([HAudio.loadSong(song.url), this.stage?.warm])
       } catch (err) {
         // 取得やデコードに失敗。ローディング画面に閉じ込めず難易度選択へ戻す
-        console.error('曲のロードに失敗しました', err)
+        console.error('ゲームの準備に失敗しました', err)
         this.setState({ phase: 'select' })
         return
       }
