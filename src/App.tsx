@@ -51,6 +51,8 @@ interface AppState {
   songIdx: number
   /** DIFFICULTIES の添字 */
   diffIdx: number
+  /** 曲えらび / むずかしさえらびで十字キーが乗っているカードの添字 */
+  cursor: number
   score: number
   combo: number
   maxCombo: number
@@ -100,6 +102,7 @@ export default class App extends Component<AppProps, AppState> {
     phase: 'loading',
     songIdx: 0,
     diffIdx: 0,
+    cursor: 0,
     score: 0,
     combo: 0,
     maxCombo: 0,
@@ -120,6 +123,8 @@ export default class App extends Component<AppProps, AppState> {
 
   private readonly stageHostRef = createRef<HTMLDivElement>()
   private readonly laneCanvasRef = createRef<HTMLCanvasElement>()
+  /** 選択画面でカーソルが乗っているカード。見えない位置に行ったとき送るのに使う */
+  private readonly cursorCardRef = createRef<HTMLButtonElement>()
   private stage: RainStage | null = null
 
   private chart: PlayNote[] = []
@@ -140,6 +145,13 @@ export default class App extends Component<AppProps, AppState> {
     window.addEventListener('keydown', this.onKey)
     window.addEventListener('pointerdown', this.onPointerDown)
     this.rafId = requestAnimationFrame(this.loop)
+  }
+
+  componentDidUpdate(_prevProps: AppProps, prev: AppState) {
+    // カードは狭い画面で折り返して縦に伸びる。2段目に回ったカーソルも見えるようにする
+    if (prev.cursor !== this.state.cursor || prev.phase !== this.state.phase) {
+      this.cursorCardRef.current?.scrollIntoView({ block: 'nearest' })
+    }
   }
 
   componentWillUnmount() {
@@ -165,7 +177,7 @@ export default class App extends Component<AppProps, AppState> {
     HAudio.sfx('select')
     HAudio.stop()
     this.stage?.setDancing(false)
-    this.setState({ phase: 'song' })
+    this.setState({ phase: 'song', cursor: this.state.songIdx })
   }
 
   private pickSong = (idx: number) => {
@@ -174,18 +186,19 @@ export default class App extends Component<AppProps, AppState> {
     // AudioContext を作ってよい。ここで失敗しても画面は動かさず、
     // 取り直しとエラー表示は startGame に任せる
     void HAudio.loadSong(SONGS[idx].url).catch(() => {})
-    this.setState({ phase: 'select', songIdx: idx, recNotice: null })
+    // カーソルは前回遊んだ難易度に乗せる
+    this.setState({ phase: 'select', songIdx: idx, cursor: this.state.diffIdx, recNotice: null })
   }
 
   // リザルトのごほうびダンスはここで止める(難易度選択・曲選択に持ち越さない)
   private backToSongSelect = () => {
     this.stage?.setDancing(false)
-    this.setState({ phase: 'song', recNotice: null })
+    this.setState({ phase: 'song', cursor: this.state.songIdx, recNotice: null })
   }
 
   private backToSelect = () => {
     this.stage?.setDancing(false)
-    this.setState({ phase: 'select' })
+    this.setState({ phase: 'select', cursor: this.state.diffIdx })
   }
 
   private replay = () => void this.startGame(this.state.diffIdx)
@@ -223,6 +236,9 @@ export default class App extends Component<AppProps, AppState> {
     this.setState({
       phase: 'game',
       diffIdx,
+      // クリックで始めたときもカーソルを追従させる。Esc やリザルトから
+      // 難易度えらびに戻ったとき、遊んだカードに乗っていてほしい
+      cursor: diffIdx,
       score: 0,
       combo: 0,
       maxCombo: 0,
@@ -251,7 +267,7 @@ export default class App extends Component<AppProps, AppState> {
         return
       }
     }
-    this.setState({ phase: 'record', recNotice: null })
+    this.setState({ phase: 'record', cursor: HAudio.DIFFICULTIES.length, recNotice: null })
   }
 
   private finish() {
@@ -264,18 +280,42 @@ export default class App extends Component<AppProps, AppState> {
     this.setState({ phase: 'result', rank: { letter: r.letter, phrase: r.phrase } })
   }
 
+  /** 難易度えらびに並ぶカードの枚数。dev では末尾に録音カードが付く */
+  private get diffCardCount() {
+    return HAudio.DIFFICULTIES.length + (import.meta.env.DEV ? 1 : 0)
+  }
+
+  /**
+   * 十字キーでカーソルを動かす。カードは横並びだが狭い画面で折り返すので、
+   * 上下も前後として扱う1次元のリングにしている。動かしたら true。
+   */
+  private moveCursor(key: string, count: number) {
+    const d = key === 'ArrowLeft' || key === 'ArrowUp' ? -1 : key === 'ArrowRight' || key === 'ArrowDown' ? 1 : 0
+    if (!d) return false
+    HAudio.sfx('select')
+    this.setState({ cursor: (this.state.cursor + count + d) % count })
+    return true
+  }
+
   private onKey = (e: KeyboardEvent) => {
     const p = this.state.phase
     if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault()
-    if (p === 'title' && (e.key === ' ' || e.key === 'Enter')) {
+    // 選択画面の Enter は自前で処理する。クリックで <button> にフォーカスが
+    // 残っていると、ブラウザが Enter で click を撃ち直して二重に決定してしまう
+    if ((p === 'song' || p === 'select') && e.key === 'Enter') e.preventDefault()
+    const decide = e.key === 'Enter' || e.key === ' '
+    if (p === 'title' && decide) {
       this.toSongSelect()
     } else if (p === 'song') {
-      const i = Number(e.key) - 1
-      if (i >= 0 && i < SONGS.length) this.pickSong(i)
+      if (decide) this.pickSong(this.state.cursor)
+      else this.moveCursor(e.key, SONGS.length)
     } else if (p === 'select') {
-      if (e.key === 'Escape') this.setState({ phase: 'song' })
-      else if (['1', '2', '3'].includes(e.key)) void this.startGame(Number(e.key) - 1)
-      else if (import.meta.env.DEV && e.key === '0') void this.startRecord()
+      if (e.key === 'Escape') this.setState({ phase: 'song', cursor: this.state.songIdx })
+      else if (decide) {
+        const i = this.state.cursor
+        if (i < HAudio.DIFFICULTIES.length) void this.startGame(i)
+        else void this.startRecord()
+      } else this.moveCursor(e.key, this.diffCardCount)
     } else if (p === 'game') {
       if (e.key === 'Escape') {
         HAudio.stop()
@@ -557,10 +597,11 @@ export default class App extends Component<AppProps, AppState> {
                 <button
                   type="button"
                   key={x.id}
-                  className="song-card song-card--track"
+                  ref={s.cursor === i ? this.cursorCardRef : null}
+                  className={`song-card song-card--track${s.cursor === i ? ' song-card--on' : ''}`}
                   onClick={() => this.pickSong(i)}
                 >
-                  <div className="song-key">キー {i + 1}</div>
+                  <div className="song-key">えらんでるよ</div>
                   <div className="song-name">{x.title}</div>
                   <div className="song-desc">{x.desc}</div>
                   <div className="song-meta">
@@ -570,9 +611,7 @@ export default class App extends Component<AppProps, AppState> {
                 </button>
               ))}
             </div>
-            <div className="select-note">
-              カードをクリック か 数字キー({SONGS.map((_, i) => i + 1).join('・')})で けってい
-            </div>
+            <div className="select-note">十字キーで えらんで エンターで けってい</div>
           </div>
         )}
 
@@ -582,8 +621,14 @@ export default class App extends Component<AppProps, AppState> {
             <div className="select-song-name">♪ {song.title}</div>
             <div className="song-list">
               {HAudio.DIFFICULTIES.map((d, i) => (
-                <button type="button" key={d.id} className="song-card" onClick={() => void this.startGame(i)}>
-                  <div className="song-key">キー {i + 1}</div>
+                <button
+                  type="button"
+                  key={d.id}
+                  ref={s.cursor === i ? this.cursorCardRef : null}
+                  className={`song-card${s.cursor === i ? ' song-card--on' : ''}`}
+                  onClick={() => void this.startGame(i)}
+                >
+                  <div className="song-key">えらんでるよ</div>
                   <div className="song-name">{d.name}</div>
                   <div className="song-desc">{d.desc}</div>
                   <div className="song-meta">
@@ -595,15 +640,20 @@ export default class App extends Component<AppProps, AppState> {
                 </button>
               ))}
               {import.meta.env.DEV && (
-                <button type="button" className="song-card" onClick={() => void this.startRecord()}>
-                  <div className="song-key">キー 0</div>
+                <button
+                  type="button"
+                  ref={s.cursor === HAudio.DIFFICULTIES.length ? this.cursorCardRef : null}
+                  className={`song-card${s.cursor === HAudio.DIFFICULTIES.length ? ' song-card--on' : ''}`}
+                  onClick={() => void this.startRecord()}
+                >
+                  <div className="song-key">えらんでるよ</div>
                   <div className="song-name">🎙 ふめんを つくる</div>
                   <div className="song-desc">じぶんで たたいて ろくおん(dev)</div>
                 </button>
               )}
             </div>
             <div className="select-note">
-              カードをクリック か 数字キー(1・2・3)で けってい ・ Esc で きょくえらび
+              十字キーで えらんで エンターで けってい ・ Esc で きょくえらび
             </div>
             {s.recNotice && <div className="select-note">{s.recNotice}</div>}
             <button type="button" className="btn btn--sm btn--ghost" onClick={this.backToSongSelect}>
