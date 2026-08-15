@@ -7,6 +7,10 @@ export type SpecialTier = 'A' | 'B' | 'C'
 
 const FRAMES = 16
 const SPRITE_ASPECT = 270 / 480
+/** キャラの定位置。ノーツレーンが右半分に重なるので左寄り */
+const CHAR_HOME_X = -1.35
+/** リザルトのごほうびダンスの立ち位置。結果カードの左脇まで避ける */
+const CHAR_VICTORY_X = -3.4
 /** 1 フレームに GPU へ上げるテクスチャの枚数 */
 const WARM_PER_FRAME = 4
 
@@ -137,6 +141,8 @@ export class RainStage {
   private dancing = false
   private beatPh = 0
   private rainLevel = 1.2
+  /** キャラの立ち位置。tick がここへ滑らかに寄せる */
+  private charTargetX = CHAR_HOME_X
 
   private lastTime = 0
   private elapsed = 0
@@ -266,7 +272,7 @@ export class RainStage {
     const W = 3.9
     const H = W * SPRITE_ASPECT
     this.charGroup = new THREE.Group()
-    this.charGroup.position.set(-1.35, 0, 0)
+    this.charGroup.position.set(CHAR_HOME_X, 0, 0)
     this.charMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(W, H), this.charMat)
     plane.position.y = H / 2 - H * 0.085
@@ -413,6 +419,7 @@ export class RainStage {
   }
 
   idle() {
+    this.charTargetX = CHAR_HOME_X
     this.play('IDLE', { fps: 13, loop: true })
   }
 
@@ -443,6 +450,13 @@ export class RainStage {
   setDancing(d: boolean) {
     this.dancing = d
     if (!d) this.idle()
+  }
+
+  /** リザルトのごほうびダンス。曲は止まっているのでビートボブは切り、絵だけ回し続ける */
+  victoryDance() {
+    this.dancing = false
+    this.charTargetX = CHAR_VICTORY_X
+    this.play('SPECIAL_B', { fps: 18, loop: true })
   }
 
   setRain(v: number) {
@@ -525,6 +539,12 @@ export class RainStage {
         }
       }
       this.applyFrame()
+    }
+
+    // 立ち位置の移動(ごほうびダンスで結果カードの脇へ寄る)
+    const cx = this.charGroup.position.x
+    if (Math.abs(cx - this.charTargetX) > 0.002) {
+      this.charGroup.position.x = cx + (this.charTargetX - cx) * Math.min(1, dt * 5)
     }
 
     // beat bob

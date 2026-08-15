@@ -79,10 +79,11 @@ const LANE_DIRS: Direction[] = ['LEFT', 'DOWN', 'UP', 'RIGHT']
 const LANE_COLORS = ['#ff8fbf', '#ffd06e', '#7fe3b3', '#a99bff']
 const LANE_ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2]
 
-const RANKS: { min: number; letter: string; phrase: string }[] = [
-  { min: 0.97, letter: 'SSS', phrase: 'でんせつの ダンサー!' },
-  { min: 0.92, letter: 'SS', phrase: 'かんぺき すぎる!' },
-  { min: 0.85, letter: 'S', phrase: 'すごい リズムかん!' },
+// dance: リザルトでホソミが踊り続けるごほうびランク
+const RANKS: { min: number; letter: string; phrase: string; dance?: boolean }[] = [
+  { min: 0.97, letter: 'SSS', phrase: 'でんせつの ダンサー!', dance: true },
+  { min: 0.92, letter: 'SS', phrase: 'かんぺき すぎる!', dance: true },
+  { min: 0.85, letter: 'S', phrase: 'すごい リズムかん!', dance: true },
   { min: 0.72, letter: 'A', phrase: 'いいかんじ!' },
   { min: 0.55, letter: 'B', phrase: 'そのちょうし!' },
   { min: -1, letter: 'C', phrase: 'また いっしょに おどろうね' },
@@ -176,9 +177,16 @@ export default class App extends Component<AppProps, AppState> {
     this.setState({ phase: 'select', songIdx: idx, recNotice: null })
   }
 
-  private backToSongSelect = () => this.setState({ phase: 'song', recNotice: null })
+  // リザルトのごほうびダンスはここで止める(難易度選択・曲選択に持ち越さない)
+  private backToSongSelect = () => {
+    this.stage?.setDancing(false)
+    this.setState({ phase: 'song', recNotice: null })
+  }
 
-  private backToSelect = () => this.setState({ phase: 'select' })
+  private backToSelect = () => {
+    this.stage?.setDancing(false)
+    this.setState({ phase: 'select' })
+  }
 
   private replay = () => void this.startGame(this.state.diffIdx)
 
@@ -207,6 +215,8 @@ export default class App extends Component<AppProps, AppState> {
     this.flash = [0, 0, 0, 0]
     HAudio.startSong(song.url)
     if (this.stage) {
+      // リザルトのごほうびダンス(SPECIAL ループ)が残っていると move() を弾くので戻す
+      this.stage.idle()
       this.stage.setBPM(song.bpm)
       this.stage.setDancing(true)
     }
@@ -246,10 +256,11 @@ export default class App extends Component<AppProps, AppState> {
 
   private finish() {
     HAudio.stop()
-    this.stage?.setDancing(false)
     const max = this.chart.length * 100
     const pct = max ? this.state.score / max : 0
     const r = RANKS.find((x) => pct >= x.min) ?? RANKS[RANKS.length - 1]
+    if (r.dance) this.stage?.victoryDance()
+    else this.stage?.setDancing(false)
     this.setState({ phase: 'result', rank: { letter: r.letter, phrase: r.phrase } })
   }
 
@@ -274,8 +285,8 @@ export default class App extends Component<AppProps, AppState> {
         this.hitLane(LANE_KEYS[e.key])
       }
     } else if (p === 'result') {
-      if (e.key === 'Enter') void this.startGame(this.state.diffIdx)
-      else if (e.key === 'Escape') this.setState({ phase: 'select' })
+      if (e.key === 'Enter') this.replay()
+      else if (e.key === 'Escape') this.backToSelect()
     }
   }
 
