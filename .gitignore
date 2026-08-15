@@ -4,3 +4,4 @@ dist/
 *.local
 
 *.vocals.wav
+__pycache__/
