@@ -27,7 +27,10 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
 | `src/songs.ts` | 収録曲の定義(タイトル・URL・BPM・歌詞・譜面の取り出し) |
 | `src/audio.ts` | mp3 の再生、雨音・効果音の合成、難易度定義 |
 | `src/lyrics.ts` | 曲ごとの歌詞と発声時刻 |
-| `src/charts.json` | 焼いた譜面。**生成物なので直接編集しない** |
+| `src/charts.json` | 焼いた/録音由来の譜面。`source` が出自。**直接編集しない**(baked は bake-chart.py、recorded は chart-feel の録音→譜面フローで書く) |
+| `src/RecordMode.tsx` | 譜面録音モード(dev限定)。本番バンドルには入らない |
+| `src/recording.ts` | 録音の型と保存(POST /__rec) |
+| `recordings/` | 録音の生データ。譜面の出自として git 管理する |
 | `src/rainStage.ts` | Three.js の雨シーンとスプライトアニメーション |
 | `src/styles.css` | 全画面のスタイル |
 | `public/assets/hosomi/` | スプライト 128 枚(WebP)。**生成物なので直接編集しない** |
@@ -59,6 +62,8 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
   依存する設計なので、同名で差し替えるとキャッシュが切れるまで「新しい譜面 × 古い
   音源」で再生されてしまう。差し替え時は `src/songs.ts` の `file` ごとファイル名を
   変え、`scripts/bake-chart.py` の `src` も追従させること。
+- **録音由来(source=recorded)の譜面は bake-chart.py の全曲生成でスキップされる**。
+  自動生成に戻すときは曲IDを明示指定する(`uv run scripts/bake-chart.py amagoi`)。
 
 ## 規約
 
@@ -68,6 +73,7 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
 - コメントは日本語。周囲のコードの密度に合わせる。
 - ゲームロジック（判定・スコア・描画）は挙動が繊細なので、リファクタ時は
   ブラウザで実際に遊んで確認する。型が通るだけでは不十分。
-- 譜面の診断・改善は chart-feel スキル（`.claude/skills/chart-feel/`）を使う。
-  安全網は `bake-chart.py` の自動検査（生成の意図どおりかしか見ていない）、
-  改善の最終判定はプレイ確認。譜面 JSON を直接編集しない。
+- 譜面の診断・改善は chart-feel スキル(`.claude/skills/chart-feel/`)を使う。
+  録音(dev限定の「譜面をつくる」)から譜面を作る手順も同スキルにある。
+  安全網は `bake-chart.py` の自動検査(recorded の曲は健全性チェックのみ)、
+  改善の最終判定はプレイ確認。譜面 JSON は必ずどちらかのフローを通して書く
