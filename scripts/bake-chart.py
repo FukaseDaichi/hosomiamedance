@@ -381,11 +381,88 @@ def bake(song: Song):
         times = select_times(song, f, key)
         notes[key] = assign_lanes(song, f, times)
         print(f"  {song.id}/{key}: {len(notes[key])} notes")
-    return {"bpm": song.bpm, "beat0": song.beat0, "songEnd": song.song_end, "notes": notes}, f
+    return {
+        "bpm": song.bpm,
+        "beat0": song.beat0,
+        "bar0": song.bar0,
+        "source": "baked",
+        "songEnd": song.song_end,
+        "notes": notes,
+    }, f
+
+
+def verify_recorded(song: Song, data: dict) -> list[str]:
+    """録音由来(Claude 整形)の譜面の健全性検査。
+
+    人間のグルーヴを尊重するため「生成の意図どおりか」系の検査
+    (ノーツ数目標・レーン分布・密度カーブ・拍頭率)はかけない。
+    壊れていないこと(叩ける・範囲内・グリッドに乗っている)だけを見る。
+    """
+    bad: list[str] = []
+    notes = data.get("notes", {})
+    if set(notes) != set(DIFF_STEPS):
+        return [f"{song.id}: 難易度キーが違う: {sorted(notes)}"]
+
+    # メタは実測定数と一致していること(変換時に書き換えてはいけない)
+    for name, want in [
+        ("bpm", song.bpm), ("beat0", song.beat0), ("bar0", song.bar0), ("songEnd", song.song_end),
+    ]:
+        if data.get(name) != want:
+            bad.append(f"{song.id}: {name} が実測定数と違う: {data.get(name)} != {want}")
+
+    counts = {}
+    for key in DIFF_STEPS:
+        ns = notes[key]
+        counts[key] = len(ns)
+        last_lane = [-9.0] * 4
+        prev_t = -9.0
+        for t, lane in ns:
+            if not (0 <= lane <= 3):
+                bad.append(f"{song.id}/{key}: レーンが範囲外 {lane} at {t}")
+                break
+            if not (0.0 < t < song.song_end):
+                bad.append(f"{song.id}/{key}: 時刻が範囲外 {t}")
+                break
+            if t < song.bar0 - 1e-3:
+                bad.append(f"{song.id}/{key}: 1小節目より前にノーツがある {t}")
+                break
+            if t >= song.bar0 + song.last_bar * song.bar:
+                bad.append(f"{song.id}/{key}: アウトロにノーツがある {t}")
+                break
+            if t < prev_t:
+                bad.append(f"{song.id}/{key}: 時刻が昇順でない {prev_t} -> {t}")
+                break
+            # 物理的に叩ける下限だけ守る: 全体は16分、同一レーンは8分
+            if prev_t > 0 and t - prev_t < song.s16 - 1e-3:
+                bad.append(f"{song.id}/{key}: 全体の最小間隔違反 {prev_t} -> {t}")
+                break
+            if t - last_lane[lane] < 2 * song.s16 - 1e-3:
+                bad.append(f"{song.id}/{key}: 同一レーン({lane})の最小間隔違反 {last_lane[lane]} -> {t}")
+                break
+            # 量子化済みであること(固定ギミック相当だけ免除)
+            if not is_call(song, t):
+                off = abs(((t - song.beat0) / song.s16) - round((t - song.beat0) / song.s16)) * song.s16
+                if off > 0.001:
+                    bad.append(f"{song.id}/{key}: 16分グリッドから {off*1000:.1f}ms ずれている at {t}")
+                    break
+            last_lane[lane] = t
+            prev_t = t
+
+    if counts["hard"] == 0:
+        bad.append(f"{song.id}: hard が空。録音の変換に失敗している")
+    if not (counts["easy"] <= counts["normal"] <= counts["hard"]):
+        bad.append(f"{song.id}: 難易度の順にノーツ数が増えていない: {counts}")
+    return bad
 
 
 def verify(song: Song, data: dict) -> list[str]:
     """譜面の不変条件を検査し、破れた項目を文字列で返す。空なら合格。"""
+    # source の綴りミスは保護(全曲生成のスキップ判定)をすり抜けるので、ここで落とす
+    source = data.get("source", "baked")
+    if source not in ("baked", "recorded"):
+        return [f"{song.id}: source が不正: {source!r}"]
+    if source == "recorded":
+        return verify_recorded(song, data)
     bad: list[str] = []
     notes = data.get("notes", {})
     lane_gap = gap_lane(song)
@@ -511,11 +588,27 @@ def main() -> int:
     if unknown:
         print(f"NG: 知らない曲 {unknown}。選べるのは {sorted(SONGS)}", file=sys.stderr)
         return 1
-    wanted = args or list(SONGS)
 
     existing: dict = {}
     if OUT.exists():
         existing = json.loads(OUT.read_text(encoding="utf-8")).get("songs", {})
+
+    wanted = args or list(SONGS)
+    if not verify_only:
+        if not args:
+            # 全曲生成では録音由来の譜面を黙って潰さない。戻すには曲IDを明示する
+            recorded = [sid for sid in wanted if existing.get(sid, {}).get("source") == "recorded"]
+            if recorded:
+                print(
+                    f"skip: {recorded} は録音由来(source=recorded)。"
+                    "自動生成に戻すには曲IDを明示指定する",
+                    file=sys.stderr,
+                )
+                wanted = [sid for sid in wanted if sid not in recorded]
+        else:
+            for sid in wanted:
+                if existing.get(sid, {}).get("source") == "recorded":
+                    print(f"note: {sid} は録音由来だが明示指定なので自動生成で上書きする", file=sys.stderr)
 
     bad: list[str] = []
     baked: dict[str, dict] = {}
