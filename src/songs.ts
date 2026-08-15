@@ -4,9 +4,15 @@
 // 強く依存するので、値の出どころを二重に持たない。
 
 import chartData from './charts.json'
-import { AMAGOI_LYRICS, AMEDANCE_LYRICS, KAMINARI_LYRICS, type LyricLine } from './lyrics'
+import {
+  AMAGOI_LYRICS,
+  AMEDANCE_LYRICS,
+  KAMINARI_LYRICS,
+  YUDACHI_LYRICS,
+  type LyricLine,
+} from './lyrics'
 
-export type SongId = 'amedance' | 'amagoi' | 'kaminari'
+export type SongId = 'amedance' | 'amagoi' | 'kaminari' | 'yudachi'
 export type DifficultyId = 'easy' | 'normal' | 'hard'
 
 export interface ChartNote {
@@ -53,6 +59,13 @@ const META: { id: SongId; title: string; desc: string; file: string; lyrics: Lyr
     desc: 'ごろごろ なっても おどっちゃう',
     file: 'hosomikaminaridance.mp3',
     lyrics: KAMINARI_LYRICS,
+  },
+  {
+    id: 'yudachi',
+    title: 'ホソミユウダチダンス',
+    desc: 'きゅうな ゆうだちに とびだせ!',
+    file: 'hosomiyudachidance.mp3',
+    lyrics: YUDACHI_LYRICS,
   },
 ]
 

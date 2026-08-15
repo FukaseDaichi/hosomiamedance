@@ -10,6 +10,7 @@ bake-chart.py の BPM / BEAT0 / BAR0 / LAST_BAR / SECTIONS を決めるための
 
 使い方:
     uv run scripts/analyze-song.py public/assets/hosomiamagoidance.mp3
+    uv run scripts/analyze-song.py public/assets/foo.mp3 --bpm 70-135
 """
 
 import sys
@@ -21,15 +22,40 @@ import numpy as np
 from librosa.feature.rhythm import tempo as estimate_tempo
 
 
-# BPM 探索の許容域。倍・半テンポを弾くため、上限は下限の 2 倍未満にしておく
+# BPM 探索の許容域。倍・半テンポを弾くため、上限は下限の 2 倍未満にしておく。
+# 既定はダンス曲の実用域。ここから外れた曲は --bpm LO-HI でずらす
+# (2倍未満の条件は保ったまま窓ごと動かす)。既定の窓に真の拍が無いと、
+# 4/3 倍のような非整数倍のテンポが1位で出てくることがある
 BPM_LO, BPM_HI = 95.0, 185.0
 
 
+def parse_range(arg: str) -> tuple[float, float]:
+    lo, hi = (float(x) for x in arg.split("-", 1))
+    if not 0 < lo < hi:
+        raise ValueError(f"BPM の範囲が不正: {arg}")
+    if hi >= lo * 2:
+        raise ValueError(f"上限は下限の2倍未満にする(倍・半テンポを弾くため): {arg}")
+    return lo, hi
+
+
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("使い方: analyze-song.py <mp3>", file=sys.stderr)
+    global BPM_LO, BPM_HI
+    argv = sys.argv[1:]
+    if "--bpm" in argv:
+        i = argv.index("--bpm")
+        if i + 1 >= len(argv):
+            print("--bpm には LO-HI を渡す(例: --bpm 70-135)", file=sys.stderr)
+            return 1
+        try:
+            BPM_LO, BPM_HI = parse_range(argv[i + 1])
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 1
+        del argv[i : i + 2]
+    if not argv:
+        print("使い方: analyze-song.py <mp3> [--bpm LO-HI]", file=sys.stderr)
         return 1
-    src = Path(sys.argv[1])
+    src = Path(argv[0])
 
     y, sr = librosa.load(str(src), sr=22050, mono=True)
     dur = len(y) / sr
@@ -70,8 +96,15 @@ def main() -> int:
     # 倍・半テンポも候補にする(librosa は倍率を取り違えることがある)。
     # ただし候補はダンス曲の実用域に絞る。「拍の位置の平均オンセット強度」は
     # 拍が疎なほど高く出るため、半テンポを候補に残すと必ずそちらが勝ってしまう
+    # --bpm で窓を明示したときだけ 3/4・4/3 倍も候補にする。既定で入れないのは、
+    # 疎なグリッドほど平均オンセット強度が高く出るため 3/4 倍が不当に勝ちうるから。
+    # 窓を動かすのは「既定の窓では拍が合わなかった」と分かっている場合なので、
+    # そのときだけ非整数倍を許す
+    ratios = {1.0, 2.0, 0.5}
+    if BPM_LO != 95.0 or BPM_HI != 185.0:
+        ratios |= {0.75, 4 / 3}
     cands = []
-    for base in {seed, seed * 2, seed / 2}:
+    for base in {seed * r for r in ratios}:
         if not (BPM_LO <= base <= BPM_HI):
             continue
         # librosa の推定はテンポグラムの分解能ぶん外すので、窓は広めに取る。
