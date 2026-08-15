@@ -121,6 +121,10 @@ uv run scripts/bake-chart.py amagoi
 BPM と `songEnd` は `charts.json` から読むので `songs.ts` には書かない。
 値の出どころを二重に持たないため。
 
+カバー画像は `public/assets/covers/<ID>.webp` に置く。URL は ID から組み立てるので
+`songs.ts` には書かない。作り方は [cover-art-prompts.md](cover-art-prompts.md)。
+置き忘れると選曲カードの絵が抜けたまま並ぶ。
+
 ## 7. 確認する
 
 ```bash

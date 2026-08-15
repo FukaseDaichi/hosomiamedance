@@ -34,6 +34,7 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
 | `src/rainStage.ts` | Three.js の雨シーンとスプライトアニメーション |
 | `src/styles.css` | 全画面のスタイル |
 | `public/assets/hosomi/` | スプライト 128 枚(WebP)。**生成物なので直接編集しない** |
+| `public/assets/covers/` | 選曲カードのカバー 16:9(WebP)。曲名は絵に焼き込んである。作り方は docs/cover-art-prompts.md |
 | `scripts/bake-sprites.py` | mp4 → 透過スプライトの変換パイプライン |
 | `scripts/bake-chart.py` | 音源解析 → 譜面の生成パイプライン。曲ごとの実測定数もここ |
 | `scripts/analyze-song.py` | 新曲の BPM・拍位相・曲構成を測る(曲追加時だけ) |
@@ -51,8 +52,10 @@ GitHub Pages に静的配信している。サーバーサイドは無い。
   WebGL コンテキストと AudioContext が二重に生成されるため。追加しない。
 - `bake-sprites` の入力はリポジトリ直下の `hosomi.mp4`（コミット済み）。通常の開発では
   走らせる必要はない。WebP エンコード(method=6)のため全 128 枚で数分かかる。
-- 見出しの「いろは餅」フォントは数字・英字のグリフを持たないため、`unicode-range` で
-  かな・漢字・全角のみに適用している。数字が別フォントで出るのは仕様。
+- 見出しの「いろは餅」フォントは**かなと全角記号しかグリフを持たない**（数字・英字に
+  加えて漢字も全部空白で出る）。`unicode-range` をその範囲に絞ってあるので、外れた文字は
+  M PLUS Rounded 1c にフォールバックする。数字や漢字が別フォントで出るのは仕様。
+  範囲に漢字を含めると、フォールバックが効かず**文字が消える**。
 - **曲の BPM・拍位相・小節線は実測済みの定数**（`scripts/bake-chart.py` の `SONGS`）。
   曲を差し替えない限り再測定しない。譜面が音とずれたときに真っ先に疑うのはここではなく、
   `startSong` の助走と `time()` の基準。

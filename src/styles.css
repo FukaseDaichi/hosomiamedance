@@ -1,10 +1,11 @@
-/* いろは餅は数字・英字・記号のグリフが空白のため、かな・漢字・全角のみに適用範囲を限定する。
-   範囲外(スコアの数字など)は M PLUS Rounded 1c にフォールバックさせる。 */
+/* いろは餅は数字・英字・記号に加えて漢字のグリフも持たない(全部空白で出る)。
+   かなと全角記号だけに適用範囲を絞り、範囲外(スコアの数字、漢字)は
+   M PLUS Rounded 1c にフォールバックさせる。 */
 @font-face {
   font-family: 'IrohaMochi';
   src: url('./fonts/iroha-mochi.otf') format('opentype');
   font-display: swap;
-  unicode-range: U+3000-30FF, U+4E00-9FFF, U+FF01-FF60;
+  unicode-range: U+3000-30FF, U+FF01-FF60;
 }
 
 html,
@@ -391,7 +392,8 @@ a:hover {
 }
 
 .select-heading {
-  font-size: 46px;
+  /* 狭い画面では見出しが2行に割れてしまうので、幅に合わせて縮める */
+  font-size: clamp(30px, 6vw, 46px);
   text-shadow: 0 4px 0 #d96a9d;
 }
 
@@ -440,12 +442,184 @@ a:hover {
     0 14px 26px rgba(120, 60, 100, 0.22);
 }
 
-/* 曲えらびのカード。曲名が難易度名より長いので幅を足し、文字を少し詰める */
-.song-card--track {
-  width: 300px;
+/* ---- 曲えらび ----
+   選んでいる曲のカバーを1枚大きく出し、残りを右に積む。曲名はカバーに
+   焼き込んであるので(docs/cover-art-prompts.md)、テキストの曲名は置かない */
+
+.select-sub {
+  margin-top: -22px;
+  font-size: 20px;
+  color: rgba(226, 214, 255, 0.85);
 }
-.song-card--track .song-name {
-  font-size: 24px;
+
+.song-picker {
+  /* カバーの幅は高さから決める。横幅だけで決めると、低い画面で
+     ヒーローが画面外にはみ出して選曲そのものが見えなくなる。
+     90px は情報バーとバッジのはみ出しぶんの余裕 */
+  --hero-w: min(60vw, calc((78vh - 90px) * 16 / 9), 1000px);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--hero-w) * 0.02);
+}
+
+.song-hero {
+  position: relative;
+  width: var(--hero-w);
+  padding: 0;
+  border: 4px solid #ff8fc4;
+  border-radius: 26px;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: #fff;
+  box-shadow:
+    0 0 0 5px rgba(255, 143, 196, 0.22),
+    0 0 34px rgba(255, 130, 190, 0.5);
+  transition: transform 0.15s ease;
+}
+.song-hero:hover {
+  transform: scale(1.015);
+}
+
+.song-hero-cover {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 22px;
+  /* 読み込みが済むまで穴が空かないように下地を敷く */
+  background: #ece5ff;
+}
+
+/* カバーの下辺に重ねる情報バー。文字はカバーの大きさに追従させる */
+.song-hero-info {
+  position: absolute;
+  left: 3%;
+  right: 3%;
+  bottom: 3%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.8em 1em;
+  border-radius: 16px;
+  background: rgba(28, 20, 52, 0.72);
+  font-size: calc(var(--hero-w) * 0.026);
+}
+.song-hero-info > * + * {
+  margin-left: 1.2em;
+  padding-left: 1.2em;
+  border-left: 1px solid rgba(255, 255, 255, 0.3);
+}
+.song-hero-len {
+  color: #ffa7cd;
+}
+
+/* 「えらんでるよ」のハートバッジ。枠の外に少しはみ出させる */
+.song-badge {
+  position: absolute;
+  top: -4%;
+  left: -3%;
+  width: calc(var(--hero-w) * 0.14);
+  aspect-ratio: 1 / 0.92;
+  display: grid;
+  place-items: center;
+  /* % は親(ヒーロー)の幅基準になってしまうので em で詰める。
+     ハートは下がとがっているぶん、文字を少し上に寄せる */
+  padding-bottom: 0.7em;
+  font-size: calc(var(--hero-w) * 0.019);
+  line-height: 1.25;
+  text-shadow: 0 2px 0 rgba(190, 60, 120, 0.5);
+  filter: drop-shadow(0 6px 14px rgba(255, 120, 175, 0.45));
+}
+/* ハート本体と文字はどちらも position 付きにして、DOM 順で重ねる。
+   z-index: -1 で沈めると、ヒーローが hover で transform したときに
+   カバー画像の裏に回ってしまう */
+.song-badge > span {
+  position: relative;
+}
+.song-badge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(160deg, #ffa3cb, #ff6ea6);
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 29'><path d='M16 29S0 18.7 0 9.6A9.6 9.6 0 0 1 16 3a9.6 9.6 0 0 1 16 6.6C32 18.7 16 29 16 29z'/></svg>");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+}
+
+/* 三角は ::before に描く。ボタン自体を clip-path で切ると、三角の外側が
+   当たり判定から外れて狭い画面ではほとんど押せなくなる */
+.song-arrow {
+  width: max(34px, calc(var(--hero-w) * 0.055));
+  aspect-ratio: 3 / 4;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.song-arrow::before {
+  content: '';
+  display: block;
+  height: 100%;
+  background: rgba(226, 214, 255, 0.45);
+  clip-path: polygon(100% 0, 100% 100%, 0 50%);
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+.song-arrow--next::before {
+  clip-path: polygon(0 0, 0 100%, 100% 50%);
+}
+.song-arrow:hover::before {
+  background: #fff;
+  transform: scale(1.12);
+}
+
+/* 選んでいない曲。3枚積んだ高さがヒーローとおおよそ揃うよう幅を決めている */
+.song-rail {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--hero-w) * 0.018);
+  width: calc(var(--hero-w) * 0.32);
+}
+
+.song-thumb {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 3px solid rgba(255, 255, 255, 0.32);
+  border-radius: 16px;
+  background: none;
+  cursor: pointer;
+  opacity: 0.86;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    border-color 0.15s ease;
+}
+.song-thumb:hover {
+  opacity: 1;
+  transform: translateX(-6px);
+  border-color: #ffc2de;
+}
+.song-thumb img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 13px;
+  background: #ece5ff;
+}
+
+/* 横に並べる余裕が無い幅。ヒーローだけ残す(左右の矢印で回せる)。
+   72vw は矢印2本ぶんを画面内に残すための上限 */
+@media (max-width: 719px) {
+  .song-picker {
+    --hero-w: min(72vw, calc((70vh - 60px) * 16 / 9));
+  }
+  .song-rail {
+    display: none;
+  }
 }
 
 /* カーソルが乗ったカードにだけ出すバッジ。display:none だと選択が移るたびに
@@ -498,8 +672,35 @@ a:hover {
 }
 
 .select-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 24px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
   font-size: 16px;
   color: rgba(215, 222, 255, 0.85);
+}
+/* 十字キーのアイコン */
+.select-note::before {
+  content: '';
+  width: 18px;
+  height: 18px;
+  background: #ffd0e6;
+  clip-path: polygon(
+    35% 0,
+    65% 0,
+    65% 35%,
+    100% 35%,
+    100% 65%,
+    65% 65%,
+    65% 100%,
+    35% 100%,
+    35% 65%,
+    0 65%,
+    0 35%,
+    35% 35%
+  );
 }
 
 /* ---- リザルト ---- */

@@ -11,6 +11,17 @@ const RecordMode = import.meta.env.DEV ? lazy(() => import('./RecordMode')) : nu
 
 type Phase = 'loading' | 'title' | 'song' | 'select' | 'game' | 'result' | 'record'
 
+/** 曲えらびの入れ替えアニメの尺。リズムゲームなので長いと選曲がもたつく */
+const FLIP_MS = 220
+const FLIP_EASE = 'cubic-bezier(0.22, 0.9, 0.28, 1)'
+
+/** DOM が書き換わる直前に測った、曲えらびのカードの位置と送った向き */
+interface FlipSnapshot {
+  first: Map<string, DOMRect>
+  /** 1 = つぎへ, -1 = まえへ, 0 = 飛び先を直接クリック */
+  dir: -1 | 0 | 1
+}
+
 /** 0 = 未処理, 1 = 叩いた, 2 = 見逃した */
 type NoteState = 0 | 1 | 2
 
@@ -97,7 +108,7 @@ const SPECIAL_NAMES: Record<SpecialTier, string> = {
   C: 'アメダンスフィーバー',
 }
 
-export default class App extends Component<AppProps, AppState> {
+export default class App extends Component<AppProps, AppState, FlipSnapshot | null> {
   state: AppState = {
     phase: 'loading',
     songIdx: 0,
@@ -125,6 +136,8 @@ export default class App extends Component<AppProps, AppState> {
   private readonly laneCanvasRef = createRef<HTMLCanvasElement>()
   /** 選択画面でカーソルが乗っているカード。見えない位置に行ったとき送るのに使う */
   private readonly cursorCardRef = createRef<HTMLButtonElement>()
+  /** 曲えらびのカード置き場。入れ替えアニメで中のカードを引くのに使う */
+  private readonly pickerRef = createRef<HTMLDivElement>()
   private stage: RainStage | null = null
 
   private chart: PlayNote[] = []
@@ -138,6 +151,8 @@ export default class App extends Component<AppProps, AppState> {
   componentDidMount() {
     // タイトルの次に選ばれる可能性が最も高い1曲目だけ先読みしておく
     HAudio.prefetchSong(SONGS[0].url)
+    // カバーは選曲画面を開いた瞬間に4枚とも要る。空のカードが並ぶ間を作らない
+    for (const s of SONGS) new Image().src = s.cover
     if (this.stageHostRef.current) {
       this.stage = new RainStage(this.stageHostRef.current)
       void this.stage.ready.then(() => this.setState({ phase: 'title' }))
@@ -147,10 +162,105 @@ export default class App extends Component<AppProps, AppState> {
     this.rafId = requestAnimationFrame(this.loop)
   }
 
-  componentDidUpdate(_prevProps: AppProps, prev: AppState) {
+  /**
+   * 曲えらびのカードが動く前の位置を測る。DOM が書き換わる直前のここでしか取れない。
+   * 測るのは変形込みの「いま見えている位置」なので、連打で前のアニメが残っていても
+   * そこから続けて動かせる。
+   */
+  getSnapshotBeforeUpdate(_prevProps: AppProps, prev: AppState): FlipSnapshot | null {
+    const cursor = this.state.cursor
+    if (prev.phase !== 'song' || this.state.phase !== 'song' || prev.cursor === cursor) return null
+
+    const first = new Map<string, DOMRect>()
+    for (const el of this.songCards()) {
+      first.set(el.dataset.song ?? '', el.getBoundingClientRect())
+      el.getAnimations().forEach((a) => a.cancel())
+    }
+    const n = SONGS.length
+    const dir = (cursor - prev.cursor + n) % n === 1 ? 1 : (prev.cursor - cursor + n) % n === 1 ? -1 : 0
+    return { first, dir }
+  }
+
+  componentDidUpdate(_prevProps: AppProps, prev: AppState, snap?: FlipSnapshot | null) {
     // カードは狭い画面で折り返して縦に伸びる。2段目に回ったカーソルも見えるようにする
     if (prev.cursor !== this.state.cursor || prev.phase !== this.state.phase) {
       this.cursorCardRef.current?.scrollIntoView({ block: 'nearest' })
+    }
+    if (snap) this.playFlip(snap)
+  }
+
+  /** 曲えらびに並んでいるカード(ヒーローとレール) */
+  private songCards() {
+    return [...(this.pickerRef.current?.querySelectorAll<HTMLElement>('[data-song]') ?? [])]
+  }
+
+  /**
+   * 曲の入れ替えを FLIP でつなぐ。動かす前後の位置の差を transform で埋めてから
+   * 元に戻すので、レールのサムネがそのままヒーローに育つように見える。
+   * 背後で雨シーンが回っているため、動かすのは transform と opacity だけ。
+   */
+  private playFlip(snap: FlipSnapshot) {
+    const picker = this.pickerRef.current
+    if (!picker || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+    let moved = false
+    for (const el of this.songCards()) {
+      const f = snap.first.get(el.dataset.song ?? '')
+      const l = el.getBoundingClientRect()
+      // レールを畳んでいる幅では、動く前の位置を持たないカードが出る
+      if (!f || !f.width || !l.width) continue
+      const dx = f.left - l.left
+      const dy = f.top - l.top
+      const scale = f.width / l.width
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(scale - 1) < 0.01) continue
+      moved = true
+      // transform-origin は左上に固定する。中心のままだと上の差分の計算が合わない
+      el.animate(
+        [
+          { transformOrigin: '0 0', transform: `translate(${dx}px, ${dy}px) scale(${scale})` },
+          { transformOrigin: '0 0', transform: 'none' },
+        ],
+        { duration: FLIP_MS, easing: FLIP_EASE },
+      )
+    }
+
+    const hero = picker.querySelector<HTMLElement>('.song-hero')
+    // レールが無い幅ではヒーローが動かないので、送った向きから滑り込ませる
+    if (!moved && hero && snap.dir) {
+      hero.animate([{ transform: `translateX(${snap.dir * 40}px)`, opacity: 0 }, { transform: 'none', opacity: 1 }], {
+        duration: FLIP_MS,
+        easing: FLIP_EASE,
+      })
+    }
+    // 着地の瞬間に縁を一度強く光らせる
+    hero?.animate(
+      [
+        { boxShadow: '0 0 0 5px rgba(255, 143, 196, 0.22), 0 0 34px rgba(255, 130, 190, 0.5)' },
+        { boxShadow: '0 0 0 11px rgba(255, 143, 196, 0.45), 0 0 58px rgba(255, 130, 190, 0.85)', offset: 0.4 },
+        { boxShadow: '0 0 0 5px rgba(255, 143, 196, 0.22), 0 0 34px rgba(255, 130, 190, 0.5)' },
+      ],
+      { duration: 420, easing: 'ease-out' },
+    )
+    // 絵が着いてから文字を読ませる。バッジは少し遅れて跳ねる
+    picker
+      .querySelector('.song-hero-info')
+      ?.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], {
+        duration: 260,
+        delay: 80,
+        easing: 'ease-out',
+        fill: 'backwards',
+      })
+    picker
+      .querySelector('.song-badge')
+      ?.animate(
+        [{ transform: 'scale(0.4)' }, { transform: 'scale(1.14)', offset: 0.6 }, { transform: 'scale(1)' }],
+        { duration: 320, delay: 60, easing: 'ease-out', fill: 'backwards' },
+      )
+    // 押した側の矢印を沈ませて、手応えを返す
+    if (snap.dir) {
+      picker
+        .querySelector(snap.dir > 0 ? '.song-arrow--next' : '.song-arrow--prev')
+        ?.animate([{ transform: 'scale(0.8)' }, { transform: 'none' }], { duration: 200, easing: 'ease-out' })
     }
   }
 
@@ -179,6 +289,15 @@ export default class App extends Component<AppProps, AppState> {
     this.stage?.setDancing(false)
     this.setState({ phase: 'song', cursor: this.state.songIdx })
   }
+
+  /** 曲えらびのカーソルを移す(まだ決定はしない) */
+  private focusSong = (idx: number) => {
+    HAudio.sfx('select')
+    this.setState({ cursor: idx })
+  }
+
+  /** 左右の矢印。端は反対側に回る */
+  private stepSong = (d: number) => this.focusSong((this.state.cursor + SONGS.length + d) % SONGS.length)
 
   private pickSong = (idx: number) => {
     HAudio.sfx('select')
@@ -507,6 +626,8 @@ export default class App extends Component<AppProps, AppState> {
     const s = this.state
     const diff = HAudio.DIFFICULTIES[s.diffIdx]
     const song = SONGS[s.songIdx]
+    // 曲えらびで大きく出している曲。決定するまでは songIdx ではなくカーソルを見る
+    const cur = SONGS[s.cursor % SONGS.length]
 
     return (
       <div className="stage">
@@ -592,26 +713,56 @@ export default class App extends Component<AppProps, AppState> {
         {s.phase === 'song' && (
           <div className="screen screen--center select-screen">
             <div className="select-heading">きょくを えらぼう</div>
-            <div className="song-list">
-              {SONGS.map((x, i) => (
-                <button
-                  type="button"
-                  key={x.id}
-                  ref={s.cursor === i ? this.cursorCardRef : null}
-                  className={`song-card song-card--track${s.cursor === i ? ' song-card--on' : ''}`}
-                  onClick={() => this.pickSong(i)}
-                >
-                  <div className="song-key">えらんでるよ</div>
-                  <div className="song-name">{x.title}</div>
-                  <div className="song-desc">{x.desc}</div>
-                  <div className="song-meta">
-                    <span className="song-bpm">BPM {Math.round(x.bpm)}</span>
-                    <span className="song-hearts">{Math.round(x.songEnd / 60)}ふん くらい</span>
-                  </div>
-                </button>
-              ))}
+            <div className="select-sub">← → で えらぶ</div>
+            <div className="song-picker" ref={this.pickerRef}>
+              <button
+                type="button"
+                className="song-arrow song-arrow--prev"
+                aria-label="まえの きょく"
+                onClick={() => this.stepSong(-1)}
+              />
+              {/* 曲名はカバーに焼き込んであるので、テキストの曲名は alt に持たせる */}
+              <button type="button" className="song-hero" data-song={cur.id} onClick={() => this.pickSong(s.cursor)}>
+                <span className="song-badge">
+                  <span>
+                    えらん
+                    <br />
+                    でるよ
+                  </span>
+                </span>
+                <img className="song-hero-cover" src={cur.cover} alt={cur.title} />
+                <span className="song-hero-info">
+                  <span>{cur.desc}</span>
+                  <span>BPM {Math.round(cur.bpm)}</span>
+                  <span className="song-hero-len">{Math.round(cur.songEnd / 60)}ふん くらい</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="song-arrow song-arrow--next"
+                aria-label="つぎの きょく"
+                onClick={() => this.stepSong(1)}
+              />
+              {/* 選んでいない曲を、カーソルの次から順に並べる */}
+              <div className="song-rail">
+                {SONGS.slice(1).map((_, k) => {
+                  const i = (s.cursor + 1 + k) % SONGS.length
+                  return (
+                    <button
+                      type="button"
+                      key={SONGS[i].id}
+                      className="song-thumb"
+                      data-song={SONGS[i].id}
+                      onClick={() => this.focusSong(i)}
+                    >
+                      <img src={SONGS[i].cover} alt={SONGS[i].title} />
+                    </button>
+                  )
+                })}
+              </div>
             </div>
-            <div className="select-note">十字キーで えらんで エンターで けってい</div>
+            {/* 「十字」はいろは餅にグリフが無く空白で出るので、かなで書く */}
+            <div className="select-note">やじるしキーで えらんで エンターで けってい</div>
           </div>
         )}
 
@@ -653,7 +804,7 @@ export default class App extends Component<AppProps, AppState> {
               )}
             </div>
             <div className="select-note">
-              十字キーで えらんで エンターで けってい ・ Esc で きょくえらび
+              やじるしキーで えらんで エンターで けってい ・ Esc で きょくえらび
             </div>
             {s.recNotice && <div className="select-note">{s.recNotice}</div>}
             <button type="button" className="btn btn--sm btn--ghost" onClick={this.backToSongSelect}>

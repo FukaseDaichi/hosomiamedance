@@ -28,6 +28,8 @@ export interface Song {
   desc: string
   /** mp3 の URL。public/ 配下なので BASE_URL を前置する */
   url: string
+  /** 選曲カードのカバー画像 URL。曲名は絵に焼き込んである */
+  cover: string
   bpm: number
   /** 1拍目の時刻(秒)。録音モードの拍線描画に使う */
   beat0: number
@@ -74,6 +76,7 @@ export const SONGS: Song[] = META.map((m) => ({
   title: m.title,
   desc: m.desc,
   url: `${import.meta.env.BASE_URL}assets/${m.file}`,
+  cover: `${import.meta.env.BASE_URL}assets/covers/${m.id}.webp`,
   bpm: chartData.songs[m.id].bpm,
   beat0: chartData.songs[m.id].beat0,
   bar0: chartData.songs[m.id].bar0,
