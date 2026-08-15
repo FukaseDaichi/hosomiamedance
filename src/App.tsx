@@ -28,7 +28,12 @@ function lyricStyle(songId: string, idx: number): CSSProperties {
     maxWidth: `calc((100% - 474px) * ${(1 - lx).toFixed(3)})`,
     // 連続する行が同じ高さに来ないよう、偶数行/奇数行で帯を分ける。
     // 帯の間に 8% の間隔を空けるので、クロスフェード中も上下が重ならない
-    bottom: `${(6 + (idx % 2) * 32 + r(8) * 24).toFixed(1)}%`,
+    // 偶数帯の下限(旧6%)は狭い画面(高さ~600px)で .hint と数px 重なることを
+    // 実機確認したので底上げした。奇数帯の上限(旧62%)も同様に .hud 側へ寄せて
+    // 詰めてある(それでも長いカタカナ語で2行になる行は高さ~180pxに達し、
+    // 高さ800px未満の画面では .hud に軽く重なりうる。歌詞テキストの折返し高さに
+    // 応じた配置までは本タスクの範囲外として見送った)
+    bottom: `${(10 + (idx % 2) * 28 + r(8) * 20).toFixed(1)}%`,
     fontSize: `${Math.round(28 + r(16) * 24)}px`,
     ['--rot' as string]: `${((r(24) - 0.5) * 14).toFixed(1)}deg`,
   }
@@ -705,13 +710,13 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
             )}
 
             {s.judge && (
-              <div key={s.judgeKey} className="judge" style={{ color: s.judge.color }}>
+              <div key={`judge-${s.judgeKey}`} className="judge" style={{ color: s.judge.color }}>
                 {s.judge.text}
               </div>
             )}
 
             {s.special && (
-              <div key={s.specialKey} className="special-banner">
+              <div key={`special-${s.specialKey}`} className="special-banner">
                 スペシャル♥ {s.special.name}
               </div>
             )}
@@ -725,8 +730,11 @@ export default class App extends Component<AppProps, AppState, FlipSnapshot | nu
                 {renderLyricLine(song.lyrics[s.lyricOut].text)}
               </div>
             )}
+            {/* judge/special と key の数値空間が重なると React が "duplicate key" を
+                警告してしまう(judgeKey・lyricIdx はどちらも 0 から増える別カウンタ)ので
+                用途ごとに接頭辞を付けて名前空間を分ける */}
             {s.lyricIdx >= 0 && (
-              <div key={s.lyricIdx} className="lyric" style={lyricStyle(song.id, s.lyricIdx)}>
+              <div key={`lyric-${s.lyricIdx}`} className="lyric" style={lyricStyle(song.id, s.lyricIdx)}>
                 {renderLyricLine(song.lyrics[s.lyricIdx].text)}
               </div>
             )}
