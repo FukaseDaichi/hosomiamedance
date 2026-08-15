@@ -371,6 +371,7 @@ def assign_lanes(song: Song, f, times):
     last_lane_t = [-9.0, -9.0, -9.0, -9.0]
     prev_lane = -1
     prev_prev = -1
+    prev3 = -1     # 3つ前のレーン。周回の検出に使う
     trill = 0      # 同じ2レーンの往復(A-B-A...)が何個続いたか
     prev_t = -9.0
     lane_gap = gap_lane(song)
@@ -394,16 +395,33 @@ def assign_lanes(song: Song, f, times):
                 score = 0.0
                 if cand == prev_lane:
                     score -= 3.0   # 縦連は強く避ける(theory.md 原則5)
-                if prev_lane >= 0 and gap < 2 * song.s16 + 1e-6:
+                # 許容が 1e-6 だと、8分ちょうどの間隔が丸め(小数4桁)で 2*s16 を
+                # 僅かに上回るだけで「速い流れではない」と判定され、階段加点が
+                # 入らなくなる。fits() と同じ理由で 1e-3 に広げてある
+                # (ユウダチダンスは 2*s16=0.352991 に対し丸め後の間隔が 0.3530)
+                if prev_lane >= 0 and gap < 2 * song.s16 + 1e-3:
                     if abs(cand - prev_lane) == 1:
                         score += 1.5   # 速い流れでは隣のレーンへ = 階段(原則4)
                 elif cand != prev_lane:
                     score += 0.5   # 遅い流れでも交互を好む(原則4)
+                    # 遅い流れでは「最も長く空いたレーン」が常に3つ前のさらに前と
+                    # 一致するため、放っておくと ←↑↓→ の周回が延々続く(easy で
+                    # 4連パターンが8種類・最頻24%になっていた)。直前3つと候補で
+                    # 4レーン揃う=ちょうど一周するときだけ減点して崩す(原則6)
+                    if prev3 >= 0 and len({prev_lane, prev_prev, prev3, cand}) == 4:
+                        score -= 0.8
                 if cand == prev_prev and trill >= 3:
                     score -= 1.0   # 同じ往復を長く続けない(原則6)
                 if fav is not None and cand == fav:
-                    score += 0.8   # 音の種類は加点どまり(キック=↓、スネア=↑)
-                score += 0.05 * min(t - last_lane_t[cand], 4.0)  # 4レーンをまんべんなく
+                    # 音の種類は加点どまり(キック=↓、スネア=↑)。0.8 だと、キックが
+                    # 四つ打ちで鳴り続ける曲(ユウダチはキック43%・スネア6%)で
+                    # ↓ にだけ引力がかかり続け、→ が 12% まで痩せる
+                    score += 0.4
+                # 4レーンをまんべんなく。0.05(上限 +0.2)では上の加点を打ち消せず、
+                # 名前どおりの働きをしていなかった。0.6 でも密な流れでの実効値は
+                # 0.4 前後(4レーンなら各レーンは 0.7 秒ほどで再訪する)なので
+                # 階段加点 1.5 を覆さず、痩せたレーンにだけ効く
+                score += 0.6 * min(t - last_lane_t[cand], 4.0)
                 if best_score is None or score > best_score:
                     best_lane, best_score = cand, score
             # 全候補が間隔制約で塞がることは通常ない(GAP_LANE 窓内のノーツは最大2個)が、
@@ -411,6 +429,7 @@ def assign_lanes(song: Song, f, times):
             lane = best_lane if best_lane is not None else max(range(4), key=lambda x: t - last_lane_t[x])
 
         trill = trill + 1 if lane == prev_prev else 0
+        prev3 = prev_prev
         prev_prev = prev_lane
         prev_lane = lane
         prev_t = t
